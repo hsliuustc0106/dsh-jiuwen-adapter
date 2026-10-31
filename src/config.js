@@ -211,8 +211,10 @@ export function resolveConfig(raw = {}, opts = {}) {
     /** User-message blocks matching these regexes are not forwarded (default: DSH runtime-context and dsh-time-context snapshots; Jiuwen stamps its own time/runtime). */
     ignoreMessagePatterns: (Array.isArray(raw.ignoreMessagePatterns) ? raw.ignoreMessagePatterns : ['^Current runtime context\\.', '^Time sampled while preparing turn \\d+'])
       .map(p => { try { return new RegExp(String(p), 'm') } catch { return null } }).filter(Boolean),
-    /** Forward the host system prompt to Jiuwen once per session (hash-gated): off (default) | persona | full. */
-    injectSystem: pickEnum(env.JIUWEN_INJECT_SYSTEM || raw.injectSystem, ['off', 'persona', 'full'], 'persona'),
+    /** Forward the host system prompt to Jiuwen once per session (hash-gated): full (default, whole host prompt, any role) | persona | off. */
+    injectSystem: pickEnum(env.JIUWEN_INJECT_SYSTEM || raw.injectSystem, ['off', 'persona', 'full'], 'full'),
+    /** Byte cap for the forwarded host system prompt; longer text is cut with an explicit truncation marker. */
+    injectSystemMaxBytes: (() => { const n = Number(env.JIUWEN_INJECT_SYSTEM_MAX_BYTES ?? raw.injectSystemMaxBytes); return Number.isFinite(n) && n >= 1024 ? Math.floor(n) : 64 * 1024 })(),
     /** Jiuwen steps in the reasoning block: summary (one line each, default) | full (structured Markdown). */
     trajectoryDetail: pickEnum(env.JIUWEN_TRAJECTORY_DETAIL || raw.trajectoryDetail, ['summary', 'full'], 'full'),
     // ── Host → Jiuwen sync (defaults ON; hostSync:false / JIUWEN_HOST_SYNC=0 disables all) ──

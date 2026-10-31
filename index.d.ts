@@ -77,6 +77,10 @@ export interface JiuwenAdapterConfig {
   historyMode?: string
   /** Forward host system prompt once per Jiuwen session: off | persona (default) | full. Jiuwen sessions only; fail-soft. */
   injectSystem?: 'off' | 'persona' | 'full'
+  /** Byte cap for the forwarded host system prompt (default 65536); longer text gets a truncation marker. */
+  injectSystemMaxBytes?: number
+  /** Route Jiuwen built-in bash/write_file/edit_file to the dsh MCP passthrough tools. */
+  mapJiuwenFsToDsh?: boolean
   /** Jiuwen steps in reasoning: summary | full (default; structured Markdown). */
   trajectoryDetail?: 'summary' | 'full'
   ignoreMessagePatterns?: Array<string | RegExp>

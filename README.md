@@ -52,7 +52,7 @@ Step-by-step guide for Mac and Linux: **[docs/quickstart.md](./docs/quickstart.m
 | 🧾 **Local titles and compaction** | Titles and `/compact` are handled locally, so they never cost a Jiuwen turn | on |
 | ⌨️ **`/jiuwen` command** | Sessions, models, modes, skills, agents, cron, MCP and more ([list](./docs/dsh-integration.md#5-jiuwen-slash-command-dsh-command-registry)) | on |
 | 🖼️ **Multimodal** | Image and file parts are sent as Jiuwen media | on |
-| 🪪 **System prompt → Jiuwen** | `injectSystem: persona\|full` sends the host persona (or whole system prompt) once per Jiuwen session, resent only on change | default `persona` (`off` to disable) |
+| 🪪 **System prompt → Jiuwen** | `injectSystem: full\|persona` sends the host system prompt (any role/profile) once per Jiuwen session, resent only on change, capped by `injectSystemMaxBytes` | default `full` (`off` to disable) |
 | 🪜 **Full trajectory** | `trajectoryDetail: full` renders Jiuwen tool calls, results, subtasks and plan steps as Markdown steps in the reasoning block | default `full` (`summary` to disable) |
 | 🔌 **dsh tools → Jiuwen** | Allowlisted dsh tools exposed to Jiuwen over MCP, each call gated by an approval | opt-in |
 | 🧭 **Bridges** | Model discovery, typed events | opt-in |

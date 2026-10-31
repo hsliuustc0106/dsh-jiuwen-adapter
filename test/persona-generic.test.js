@@ -31,8 +31,8 @@ test('generic persona: hash gate, cap, full mode unaffected', () => {
   assert.ok(first.hash)
   assert.equal(applySystemInjection('q', opts(sys), { jiuwenSessionId: 's', systemHash: first.hash }, 'persona', 'P1').query, 'q')
   const big = 'é'.repeat(9000)
-  const r = applySystemInjection('q', opts(`${big}\n\n${BOILER}`), {}, 'persona', big)
-  assert.ok(Buffer.byteLength(r.query) < 8 * 1024 + 100 && r.query.includes('[truncated]'))
+  const r = applySystemInjection('q', opts(`${big}\n\n${BOILER}`), {}, 'persona', big, 8192)
+  assert.ok(Buffer.byteLength(r.query) < 8 * 1024 + 100 && r.query.includes('host system prompt truncated'))
   assert.ok(applySystemInjection('q', opts(sys), {}, 'full', 'P1').query.includes('DeepSeek Harness'))
 })
 

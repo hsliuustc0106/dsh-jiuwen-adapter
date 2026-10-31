@@ -1,6 +1,9 @@
 /**
- * injectSystem: forward the host system prompt (or only its FlyBot persona part) to Jiuwen once per
- * mapped session, as a prefixed block on the query. Jiuwen chat.send has no system field.
+ * injectSystem: forward the host system prompt to Jiuwen once per mapped session, as a prefixed block
+ * on the query (Jiuwen chat.send has no system/instructions field; params are session_id, query, mode,
+ * cwd, project_dir, workspace_dir, trusted_dirs, mcp, ...). Generic: whatever system/developer text the
+ * host supplies for the session (any profile, any role) is forwarded verbatim in `full` mode (default);
+ * nothing role-specific is detected. Resent only when its hash changes (marked as a replacement).
  * Every helper fails soft: on any error the caller sends the plain query (old behaviour).
  */
 import { createHash } from 'node:crypto'
@@ -9,7 +12,8 @@ import { fsRouteHint } from './fs-route.js'
 
 export const SYSTEM_OPEN = '[System instructions from host]'
 export const SYSTEM_CLOSE = '[/System]'
-export const SYSTEM_MAX_BYTES = 8 * 1024
+export const SYSTEM_MAX_BYTES = 64 * 1024
+export const SYSTEM_UPDATED = '[System instructions from host — updated; they replace the previous host instructions]'
 
 /** Latest system text: in-history system/developer messages win over options.system. */
 export function latestSystemText(options) {
@@ -72,8 +76,10 @@ export function genericPersona(system, persona) {
 
 export function capBytes(text, max = SYSTEM_MAX_BYTES) {
   const buf = Buffer.from(text, 'utf8')
-  if (buf.length <= max) return text
-  return `${buf.subarray(0, max - 20).toString('utf8').replace(/\uFFFD+$/, '')}\n…[truncated]`
+  if (!(max > 0) || buf.length <= max) return text
+  const marker = `\n…[host system prompt truncated by dsh-jiuwen adapter: kept ${max} of ${buf.length} bytes]`
+  const keep = Math.max(0, max - Buffer.byteLength(marker))
+  return `${buf.subarray(0, keep).toString('utf8').replace(/\uFFFD+$/, '')}${marker}`
 }
 
 export function systemHash(text) {
@@ -84,7 +90,7 @@ export function systemHash(text) {
  * @returns {{ query: string, hash?: string }} query with the block prefixed when it is new for
  * this mapping (hash differs from mapping.systemHash); otherwise the query unchanged.
  */
-export function applySystemInjection(query, options, mapping, mode, fallbackPersona) {
+export function applySystemInjection(query, options, mapping, mode, fallbackPersona, maxBytes = SYSTEM_MAX_BYTES) {
   try {
     if (mode !== 'persona' && mode !== 'full') return { query }
     const sys = latestSystemText(options)
@@ -93,10 +99,11 @@ export function applySystemInjection(query, options, mapping, mode, fallbackPers
     let body = mode === 'full' ? sys : extractPersona(sys)
     if (!body && mode === 'persona') body = genericPersona(sys, fallbackPersona)
     if (!body) return { query }
-    const capped = capBytes(body)
+    const capped = capBytes(body, maxBytes)
     const hash = systemHash(`${mapping?.jiuwenSessionId || ''}\n${mode}\n${capped}`)
     if (mapping?.systemHash === hash) return { query }
-    return { query: `${SYSTEM_OPEN}\n${capped}\n${SYSTEM_CLOSE}\n\n${query}`, hash }
+    const open = mapping?.systemHash ? SYSTEM_UPDATED : SYSTEM_OPEN
+    return { query: `${open}\n${capped}\n${SYSTEM_CLOSE}\n\n${query}`, hash, updated: Boolean(mapping?.systemHash), bytes: Buffer.byteLength(capped) }
   } catch {
     return { query }
   }

@@ -185,7 +185,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           const summary = localCompaction(options, cfg.ignoreMessagePatterns, mapping.jiuwenSessionId)
           let compacted
           if (cfg.compactionMode === 'local+jiuwen' && mapping.turns > 0) {
-            try { await this._gatewayTransport().rpc('command.compact', { session_id: mapping.jiuwenSessionId }, { timeoutMs: 60_000 }); compacted = true } catch (error) { compacted = String(error?.message || error).slice(0, 200) }
+            try { await this._gatewayTransport().rpc('command.compact', { session_id: mapping.jiuwenSessionId }, { timeoutMs: 60_000 }); compacted = true; try { deps.sessions.update?.(dshSessionId, { systemHash: undefined }) } catch { /* ignore */ } } catch (error) { compacted = String(error?.message || error).slice(0, 200) }
           }
           makeTrace(cfg.traceFile)({ at: 'local-compaction', chars: summary.length, jiuwenCompact: compacted })
           yield *emitTextReply(summary)
@@ -223,8 +223,9 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           // injectSystem (jiuwen sessions only; fail soft). Skipped for aux calls and ask_user answers.
           let systemHash
       if (!aux && cfg.injectSystem !== 'off' && !turnMapping.pendingQuestion) {
-            const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId))
+            const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId), cfg.injectSystemMaxBytes)
             query = inj.query; systemHash = inj.hash
+            if (inj.hash) makeTrace(cfg.traceFile)({ at: 'system-inject', dshSessionId, mode: cfg.injectSystem, bytes: inj.bytes, updated: inj.updated, hash: inj.hash })
           }
           const trace = makeTrace(cfg.traceFile)
           let mcpName = cfg.mcpServerName
