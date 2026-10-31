@@ -136,7 +136,7 @@ describe('real-host A/B compatibility', { skip: !_hasHost && 'dsh host packages 
 describe('static: no global mutation in src/', () => {
   it('mcp bridge detaches its process exit listener on stop', () => {
     const src = _read(`${_ROOT}src/mcp-bridge.js`, 'utf8')
-    assert.ok((src.match(/process\.off\('exit', removeEp\)/g) || []).length >= 2)
+    assert.ok((src.match(/process\.off\('exit', removeAllEps\)/g) || []).length >= 2)
   })
   it('no env writes, globalThis writes, prototype patches or process listeners', () => {
     const bad = /process\.env(\.\w+|\[[^\]]+\])\s*=(?!=)|globalThis\.\w+\s*=(?!=)|\.prototype\.\w+\s*=(?!=)|process\.(on|once|addListener|prependListener)\(|Object\.defineProperty\((globalThis|Object|Array|Function|String|Promise)\b/

@@ -185,7 +185,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           const summary = localCompaction(options, cfg.ignoreMessagePatterns, mapping.jiuwenSessionId)
           let compacted
           if (cfg.compactionMode === 'local+jiuwen' && mapping.turns > 0) {
-            try { await this._gatewayTransport().rpc('command.compact', { session_id: mapping.jiuwenSessionId }, { timeoutMs: 60_000 }); compacted = true } catch (error) { compacted = String(error?.message || error).slice(0, 200) }
+            try { await this._gatewayTransport().rpc('command.compact', { session_id: mapping.jiuwenSessionId }, { timeoutMs: 60_000 }); compacted = true; try { deps.sessions.update?.(dshSessionId, { systemHash: undefined }) } catch { /* ignore */ } } catch (error) { compacted = String(error?.message || error).slice(0, 200) }
           }
           makeTrace(cfg.traceFile)({ at: 'local-compaction', chars: summary.length, jiuwenCompact: compacted })
           yield *emitTextReply(summary)
@@ -223,18 +223,21 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           // injectSystem (jiuwen sessions only; fail soft). Skipped for aux calls and ask_user answers.
           let systemHash
       if (!aux && cfg.injectSystem !== 'off' && !turnMapping.pendingQuestion) {
-            const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId))
+            const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId), cfg.injectSystemMaxBytes)
             query = inj.query; systemHash = inj.hash
+            if (inj.hash) makeTrace(cfg.traceFile)({ at: 'system-inject', dshSessionId, mode: cfg.injectSystem, bytes: inj.bytes, updated: inj.updated, hash: inj.hash })
           }
           const trace = makeTrace(cfg.traceFile)
           let mcpName = cfg.mcpServerName
+          let mcpAttached = false
           if (!aux && cfg.toolPassthrough === 'mcp' && deps.mcpBridge && options.tools?.length) {
             const r = await deps.mcpBridge.prepare(options.tools, dshSessionId)
             mcpName = r?.mcpServerName || cfg.mcpServerName
             trace({ at: 'mcp-passthrough', exposed: deps.mcpBridge.exposed?.(dshSessionId) ?? deps.mcpBridge.exposed(), mcpServerName: mcpName, error: r?.error })
-            if (r && !r.error) overrides.mcp = [...(overrides.mcp || []), mcpName]
+            if (r && !r.error) { overrides.mcp = [...(overrides.mcp || []), mcpName]; mcpAttached = true }
           }
-          if (!aux && cfg.mapJiuwenFsToDsh && !turnMapping.pendingQuestion) {
+          // Only point the model at mcp_<server>_* when the passthrough server is actually attached this turn.
+          if (!aux && cfg.mapJiuwenFsToDsh && mcpAttached && !turnMapping.pendingQuestion) {
             const fs = applyFsRouteInjection(query, turnMapping, true, mcpName)
             query = fs.query
             if (fs.hash) turnMapping.fsRouteHash = fs.hash

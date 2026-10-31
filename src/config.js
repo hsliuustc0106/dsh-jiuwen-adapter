@@ -161,6 +161,10 @@ export function resolveConfig(raw = {}, opts = {}) {
         : ((raw.hostSync === false || env.JIUWEN_HOST_SYNC === '0' || String(env.JIUWEN_TOOL_PASSTHROUGH || raw.toolPassthrough || '').toLowerCase() === 'off') ? [] : ['*'])),
     /** 'dsh' (default): every passthrough call needs ctx.approval allowed-once (deny when unavailable) | 'none'. */
     toolApproval: pickEnum(env.JIUWEN_TOOL_APPROVAL || raw.toolApproval, ['dsh', 'none'], 'dsh'),
+    /** Passthrough tools that skip the per-call approval gate: read-only dsh memory/session-query tools (dsh itself never asks for them). */
+    toolApprovalExempt: Array.isArray(raw.toolApprovalExempt) ? raw.toolApprovalExempt.map(String)
+      : env.JIUWEN_TOOL_APPROVAL_EXEMPT !== undefined ? String(env.JIUWEN_TOOL_APPROVAL_EXEMPT).split(',').map(x => x.trim()).filter(Boolean)
+        : ['session_search', 'session_event_search', 'session_event_read', 'session_trace', 'session_event_trace'],
     mapJiuwenFsToDsh,
 
     toolCallTimeoutMs: Number(raw.toolCallTimeoutMs ?? env.JIUWEN_TOOL_CALL_TIMEOUT_MS ?? 120_000),
@@ -211,8 +215,10 @@ export function resolveConfig(raw = {}, opts = {}) {
     /** User-message blocks matching these regexes are not forwarded (default: DSH runtime-context and dsh-time-context snapshots; Jiuwen stamps its own time/runtime). */
     ignoreMessagePatterns: (Array.isArray(raw.ignoreMessagePatterns) ? raw.ignoreMessagePatterns : ['^Current runtime context\\.', '^Time sampled while preparing turn \\d+'])
       .map(p => { try { return new RegExp(String(p), 'm') } catch { return null } }).filter(Boolean),
-    /** Forward the host system prompt to Jiuwen once per session (hash-gated): off (default) | persona | full. */
-    injectSystem: pickEnum(env.JIUWEN_INJECT_SYSTEM || raw.injectSystem, ['off', 'persona', 'full'], 'persona'),
+    /** Forward the host system prompt to Jiuwen once per session (hash-gated): full (default, whole host prompt, any role) | persona | off. */
+    injectSystem: pickEnum(env.JIUWEN_INJECT_SYSTEM || raw.injectSystem, ['off', 'persona', 'full'], 'full'),
+    /** Byte cap for the forwarded host system prompt; longer text is cut with an explicit truncation marker. */
+    injectSystemMaxBytes: (() => { const n = Number(env.JIUWEN_INJECT_SYSTEM_MAX_BYTES ?? raw.injectSystemMaxBytes); return Number.isFinite(n) && n >= 1024 ? Math.floor(n) : 64 * 1024 })(),
     /** Jiuwen steps in the reasoning block: summary (one line each, default) | full (structured Markdown). */
     trajectoryDetail: pickEnum(env.JIUWEN_TRAJECTORY_DETAIL || raw.trajectoryDetail, ['summary', 'full'], 'full'),
     // ── Host → Jiuwen sync (defaults ON; hostSync:false / JIUWEN_HOST_SYNC=0 disables all) ──

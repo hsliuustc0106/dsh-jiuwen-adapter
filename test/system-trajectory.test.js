@@ -78,13 +78,13 @@ test('applySystemInjection: off/no markers → unchanged; hash gates resend; lat
   assert.notEqual(applySystemInjection('hi', opts, { jiuwenSessionId: 'k', systemHash: a.hash }, 'persona').hash, undefined)
   const f = applySystemInjection('hi', opts, {}, 'full'); assert.match(f.query, /cwd=\/tmp/)
   assert.equal(latestSystemText({ system: 'old', messages: [{ role: 'system', content: 'a' }, { role: 'user', content: 'u' }, { role: 'system', content: 'new' }] }), 'new')
-  assert.ok(Buffer.byteLength(capBytes('é'.repeat(9000))) <= 8192)
+  assert.ok(Buffer.byteLength(capBytes('é'.repeat(9000), 8192)) <= 8192)
   assert.equal(applySystemInjection('q', { get messages() { throw new Error('boom') } }, {}, 'full').query, 'q')
 })
 
-test('config defaults: injectSystem persona, trajectoryDetail full; bad values fall back', () => {
-  const c = loadConfig({}, { env: {} }); assert.equal(c.injectSystem, 'persona'); assert.equal(c.trajectoryDetail, 'full')
-  const d = loadConfig({ injectSystem: 'nope', trajectoryDetail: 'FULL' }, { env: {} }); assert.equal(d.injectSystem, 'persona'); assert.equal(d.trajectoryDetail, 'full')
+test('config defaults: injectSystem full, trajectoryDetail full; bad values fall back', () => {
+  const c = loadConfig({}, { env: {} }); assert.equal(c.injectSystem, 'full'); assert.equal(c.trajectoryDetail, 'full')
+  const d = loadConfig({ injectSystem: 'nope', trajectoryDetail: 'FULL' }, { env: {} }); assert.equal(d.injectSystem, 'full'); assert.equal(d.trajectoryDetail, 'full')
 })
 
 test('config opt-outs: off / summary still valid via raw and env', () => {

@@ -24,7 +24,10 @@ import { JIUWEN_EVENT, JIUWEN_TYPED_EVENTS } from './typed-events.js'
 import { typedEventFor, installSessionSync, createPlanBridge, createModelDiscovery } from './bridges.js'
 import { installHostSync } from './host-sync.js'
 export { JIUWEN_EVENT, JIUWEN_TYPED_EVENTS }
-export const inject = ['llm', 'agents', 'tools', 'approval']
+// Only `llm` is required. agents/tools/approval are resolved lazily per call via service() (ctx.get),
+// so hosts without them (plain Cordis + dsh-llm) still load the provider; Cordis has no optional
+// inject, and requiring them kept the plugin from ever starting on such hosts.
+export const inject = ['llm']
 
 export { createJiuwenAdapter as JiuwenLlmAdapter }
 

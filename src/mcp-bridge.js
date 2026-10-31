@@ -234,7 +234,7 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     listenReady = new Promise((resolve) => {
       server.once('error', (error) => resolve({ error: String(error?.message || error) }))
       server.listen(0, '127.0.0.1', () => {
-        process.off('exit', removeAllEps); process.once('exit', removeAllEps)
+        process.off('exit', removeAllEps); process.once('exit', removeAllEps) // compat-allow: ep-file cleanup, detached in stop()
         resolve({ ok: true })
       })
     })
