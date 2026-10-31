@@ -9,6 +9,7 @@
  *   gateway — DEFAULT. WebSocket chat.send; full Jiuwen agent/swarm turn.
  *   openai  — diagnostics / connectivity fallback only (not the product brain).
  */
+import { DEFAULT_BUSY_IGNORE_SOURCES } from './busy-interrupt.js'
 
 const DEFAULT_MODELS = [
   { id: 'jiuwen-default', name: 'Jiuwen Default', contextWindow: 128_000, maxTokens: 8192 },
@@ -211,6 +212,8 @@ export function resolveConfig(raw = {}, opts = {}) {
      * into one step and a note that the previous turn was interrupted; 'queue' = wait for the turn to end.
      */
     onBusyMessage: pickEnum(env.JIUWEN_ON_BUSY_MESSAGE || raw.onBusyMessage, ['interrupt', 'queue'], 'interrupt'),
+    /** Inbox source kinds that never trigger interrupt-on-busy (automation, not a person). */
+    busyIgnoreSources: Array.isArray(raw.busyIgnoreSources) ? raw.busyIgnoreSources.map(String) : DEFAULT_BUSY_IGNORE_SOURCES,
     /** Max wait for chat.interrupt to settle before the resend (interrupt-on-busy). */
     interruptSettleMs: Number(raw.interruptSettleMs ?? env.JIUWEN_INTERRUPT_SETTLE_MS ?? 8000),
     /** Host auxiliary calls (GenerateOptions.purpose): session-title → 'local' (instant heuristic) | 'jiuwen'. */

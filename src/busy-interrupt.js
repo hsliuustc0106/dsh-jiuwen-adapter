@@ -20,7 +20,14 @@
  * Host stop/cancel always wins: an aborted turn finishes `aborted`, nothing is promoted or noted.
  */
 
-const USER_SOURCES = new Set(['user', 'user-rpc'])
+/**
+ * Inbox sources that are host automation, not a person typing (never interrupt): question-card replies,
+ * schedules, goal rounds, sub-agent results / inter-agent messages. Plus any message with
+ * `source.form === 'notice'` (injected notices). Everything else that wakes the session — dsh web/RPC
+ * prompts (`user`), and messages a plugin relays on behalf of a person (e.g. an IM bridge) — interrupts.
+ * Override with config `busyIgnoreSources`.
+ */
+export const DEFAULT_BUSY_IGNORE_SOURCES = Object.freeze(['user-question-reply', 'schedule', 'goal', 'subagent', 'subagent-settled', 'agent-message', 'runtime-context', 'system'])
 
 /** Note prepended to the resend query (consumed once). */
 export function interruptNote(count = 1) {
@@ -29,11 +36,15 @@ export function interruptNote(count = 1) {
     + 'The message(s) below are the latest instructions and supersede the interrupted request where they conflict.]'
 }
 
-/** True when an inbox message should trigger an interrupt (real user input only). */
-export function isUserMessage(message) {
-  const kind = message?.source?.kind
-  if (kind === undefined) return Boolean(message)
-  return USER_SOURCES.has(kind)
+/** True when an inbox message should trigger an interrupt (person-originated input, not automation). */
+export function isUserMessage(message, ignore = DEFAULT_BUSY_IGNORE_SOURCES) {
+  if (!message || typeof message !== 'object') return false
+  if (message.role && message.role !== 'user') return false
+  const src = message.source
+  if (src?.form === 'notice') return false
+  const kind = src?.kind
+  if (kind === undefined) return true
+  return !ignore.includes(String(kind))
 }
 
 /**
@@ -94,7 +105,7 @@ export function createBusyRegistry(deps) {
       if (cfg.onBusyMessage !== 'interrupt') return 'queue'
       const st = turns.get(dshSessionId)
       if (!st || st.done) return 'idle'
-      if (!isUserMessage(message)) return 'ignored'
+      if (!isUserMessage(message, cfg.busyIgnoreSources || DEFAULT_BUSY_IGNORE_SOURCES)) return 'ignored'
       if (st.awaiting === 'question') return 'question' // interaction.js closes the question; the turn ends itself
       st.count++
       if (st.requested) { trace({ at: 'turn-interrupt', phase: 'coalesced', dshSessionId, messages: st.count }); return 'coalesced' }

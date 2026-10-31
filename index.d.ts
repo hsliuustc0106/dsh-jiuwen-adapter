@@ -89,6 +89,8 @@ export interface JiuwenAdapterConfig {
   onBusyMessage?: 'interrupt' | 'queue'
   /** Max ms to wait for chat.interrupt to settle before the resend (default 8000). Env JIUWEN_INTERRUPT_SETTLE_MS. */
   interruptSettleMs?: number
+  /** Inbox source kinds that never interrupt (default: user-question-reply, schedule, goal, subagent, subagent-settled, agent-message, runtime-context, system; plus any source.form 'notice'). */
+  busyIgnoreSources?: string[]
   llmAdapterModule?: string
   mappingPath?: string
   mcpRpcTimeoutMs?: number

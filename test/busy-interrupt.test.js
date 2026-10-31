@@ -85,6 +85,11 @@ test('registry unit: idle/queue/ignored/coalesced/deferred/question, settle prom
   const st3 = reg.begin('c'); reg.setAwaiting('c', 'approval'); assert.equal(reg.noteMessage('c', u), 'deferred'); st3.end()
   const st4 = reg.begin('d'); reg.setAwaiting('d', 'question'); assert.equal(reg.noteMessage('d', u), 'question'); st4.end()
   assert.equal(isUserMessage({ content: 'x' }), true)
+  // Plugin relays of a person's message interrupt; automation / injected notices do not.
+  assert.equal(isUserMessage({ role: 'user', source: { kind: 'some-im-bridge', form: 'relay' } }), true)
+  assert.equal(isUserMessage({ role: 'user', source: { kind: 'some-im-bridge', form: 'notice', summary: 'job ended' } }), false)
+  for (const kind of ['schedule', 'goal', 'subagent-settled', 'agent-message', 'user-question-reply']) assert.equal(isUserMessage({ source: { kind } }), false, kind)
+  assert.equal(isUserMessage({ source: { kind: 'x' } }, ['x']), false, 'busyIgnoreSources override')
   assert.match(interruptNote(1), /a new message/)
 })
 
