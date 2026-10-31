@@ -71,7 +71,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
     _gatewayTransport() {
       const cfg = this._cfg()
       const key = JSON.stringify([cfg.gatewayURL, cfg.authToken, cfg.userId, cfg.eventDisplay, cfg.forwardReasoning,
-        cfg.showProcessingStatus, cfg.emitUsage, cfg.interruptOnAbort, cfg.swarmflowStopOnAbort, cfg.swarmflowReply, cfg.documentPersist, cfg.finalGraceMs, cfg.terminalFinalGraceMs, cfg.recoverOnDrop, cfg.recoverWindowMs, cfg.postCancelSettleMs, cfg.chatMode, cfg.workMode, cfg.projectDir])
+        cfg.showProcessingStatus, cfg.emitUsage, cfg.interruptOnAbort, cfg.swarmflowStopOnAbort, cfg.swarmflowReply, cfg.documentPersist, cfg.finalGraceMs, cfg.terminalFinalGraceMs, cfg.recoverOnDrop, cfg.recoverWindowMs, cfg.postCancelSettleMs, cfg.interruptSettleMs, cfg.chatMode, cfg.workMode, cfg.projectDir])
       if (!this._gateway || this._gatewayKey !== key) {
         this._gateway = new GatewayTransport({
           gatewayURL: cfg.gatewayURL,
@@ -97,6 +97,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           documentPersist: cfg.documentPersist,
           finalGraceMs: cfg.finalGraceMs,
           postCancelSettleMs: cfg.postCancelSettleMs,
+          interruptSettleMs: cfg.interruptSettleMs,
           terminalFinalGraceMs: cfg.terminalFinalGraceMs,
           recoverOnDrop: cfg.recoverOnDrop,
           recoverWindowMs: cfg.recoverWindowMs,
@@ -220,6 +221,14 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           const turnMapping = aux ? { ...mapping, jiuwenSessionId: `${mapping.jiuwenSessionId}-aux-${Date.now().toString(36)}`, turns: 0 } : mapping
           if (aux) overrides.historyMode = 'transcript'
           let query = buildQuery(options, turnMapping, cfg, overrides)
+          // Interrupt-on-busy: the previous turn was cut by a new user message → say so (once), before system injection.
+          if (!aux && deps.busy) {
+            const note = deps.busy.takeNote(dshSessionId)
+            if (note && !turnMapping.pendingQuestion) {
+              query = `${note}\n\n${query}`
+              makeTrace(cfg.traceFile)({ at: 'turn-interrupt', phase: 'resend', dshSessionId, query: query.slice(0, 300) })
+            }
+          }
           // injectSystem (jiuwen sessions only; fail soft). Skipped for aux calls and ask_user answers.
           let systemHash
       if (!aux && cfg.injectSystem !== 'off' && !turnMapping.pendingQuestion) {
@@ -249,6 +258,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
             blocks: JSON.stringify((options.messages || []).flatMap(m => Array.isArray(m.content) ? m.content.filter(b => b?.type !== 'text') : [])).slice(0, 1500) })
           let recorded = false
           const endTurn = aux ? () => {} : (deps.sessions.beginTurn?.(dshSessionId) || (() => {}))
+          const busy = !aux && deps.busy && cfg.onBusyMessage === 'interrupt' ? deps.busy.begin(dshSessionId) : undefined
           try {
           request = { ...request, messages: options.messages }
           yield *this._gatewayTransport().stream(request, turnMapping, {
@@ -256,14 +266,20 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
             mark: (name) => trace({ at: 'mark', name }),
             traceParams: (p) => trace({ at: 'params', params: { ...p, content: undefined, query: String(p.query).slice(0, 300) } }),
             overrides,
-            ...(deps.interact && !aux ? { interact: (q) => deps.interact({ ...q, told: overrides.supportsUserInteraction === true }, dshSessionId) } : {}),
+            ...(busy ? { busy } : {}),
+            ...(deps.interact && !aux ? { interact: async (q) => {
+              // Approval cards defer an interrupt-on-busy until answered; question cards are superseded by interaction.js.
+              const approvalLike = q?.eventType === 'plan.approval_required' || /^(permission|confirm)_interrupt$|^swarmflow_human$/.test(String(q?.payload?.source || ''))
+              deps.busy?.setAwaiting(dshSessionId, approvalLike ? 'approval' : 'question')
+              try { return await deps.interact({ ...q, told: overrides.supportsUserInteraction === true }, dshSessionId) } finally { deps.busy?.setAwaiting(dshSessionId, null) }
+            } } : {}),
             onEvent: (e) => {
               trace({ at: 'event', type: e.type, name: e.name, event: e.event, ...(e.type === 'interaction_answered' ? { eventType: e.eventType, source: e.source, outcome: e.outcome, raw: JSON.stringify(e.raw).slice(0, 1500) } : {}) })
               try { overrides.onEvent?.(e) } catch { /* ignore */ }
               try { deps.onEvent?.({ dshSessionId, ...e }) } catch { /* ignore */ }
             },
             onTurnEnd: (info) => {
-              trace({ at: 'turn-end', reason: info.reason, chars: info.text?.length })
+              trace({ at: 'turn-end', reason: info.reason, chars: info.text?.length, ...(info.interrupted ? { interrupted: true } : {}) })
               recorded = true
               if (!aux && (info.reason?.kind === 'stop' || info.reason?.kind === 'aborted')) {
                 deps.sessions.recordTurn?.(dshSessionId, { requestId: info.requestId, pendingQuestion: info.pendingQuestion, ...(systemHash ? { systemHash } : {}) })
@@ -279,6 +295,9 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
               trace({ at: 'turn-end', reason: { kind: 'aborted' } })
               deps.sessions.recordTurn?.(dshSessionId, {})
             }
+            busy?.end()
+            // Host stop/cancel wins over a pending interrupt note.
+            if (options.signal?.aborted) deps.busy?.clearNote(dshSessionId)
             endTurn()
           }
           return

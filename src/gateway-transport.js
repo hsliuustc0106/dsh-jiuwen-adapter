@@ -57,6 +57,9 @@ export function formatGatewayError(err, depth = 0) {
 /** Jiuwen interaction sources that must be answered by a resuming chat.send (see jiuwenswarm runtime/interaction.py). */
 export const INTERRUPT_RESUME_SOURCES = new Set(['confirm_interrupt', 'permission_interrupt', 'ask_user_interrupt', 'evolution_interrupt'])
 
+/** Marker appended to a turn ended by interrupt-on-busy (a new user message arrived). */
+export const INTERRUPTED_MARK = '⏹ (interrupted — a new message arrived; continuing with it)'
+
 /** Marker on text recovered from Jiuwen history after a mid-turn Gateway drop. */
 export const RECOVERED_MARK = '[Recovered from Jiuwen history after the Gateway connection dropped]'
 
@@ -109,6 +112,8 @@ export class GatewayTransport {
     this.postCancelSettleMs = Number.isFinite(opts.postCancelSettleMs) ? opts.postCancelSettleMs : 1000
     /** @type {Map<string, number>} */
     this.recentCancels = new Map()
+    /** Interrupt-on-busy: max wait for chat.interrupt to settle (interrupt_result / completion) before resending. */
+    this.interruptSettleMs = Number.isFinite(opts.interruptSettleMs) && opts.interruptSettleMs >= 0 ? opts.interruptSettleMs : 8000
     this.WebSocketImpl = opts.WebSocketImpl ?? globalThis.WebSocket
     this.auth = resolveAuthMaterials({
       userId: opts.userId || 'dsh-adapter',
@@ -198,7 +203,7 @@ export class GatewayTransport {
       }))
 
       mark('chat-send'); turn.traceParams?.(params)
-      yield *this._consume(ws, requestId, signal, { recover: { sessionId: params.session_id, query }, mapping, onEvent: turn.onEvent, onTurnEnd: turn.onTurnEnd, mark, interact: turn.interact, resumeParams: { session_id: params.session_id, mode, user_id: params.user_id, ...(projectDir ? { project_dir: projectDir, cwd: projectDir } : {}) } })
+      yield *this._consume(ws, requestId, signal, { recover: { sessionId: params.session_id, query }, mapping, onEvent: turn.onEvent, onTurnEnd: turn.onTurnEnd, mark, interact: turn.interact, busy: turn.busy, resumeParams: { session_id: params.session_id, mode, user_id: params.user_id, ...(projectDir ? { project_dir: projectDir, cwd: projectDir } : {}) } })
     } catch (error) {
       yield failureFromError(error, signal)
     } finally {
@@ -620,6 +625,8 @@ export class GatewayTransport {
     let segStart = 0
     let replay = null
     const answeredIds = new Set()
+    /** Ended by an interrupt-on-busy (new host user message). */
+    let interrupted = false
     /** Model answer text (delta/final) seen this turn, as opposed to activity markers in the text block. */
     let answerSeen = false
     const queue = []
@@ -639,6 +646,9 @@ export class GatewayTransport {
     const onClose = () => push({ ok: false, drop: true, error: Object.assign(new Error('Gateway WebSocket closed mid-turn — in-flight answer lost; send your next message to reconnect'), { code: 'TRANSPORT' }) })
     const onError = () => push({ ok: false, drop: true, error: Object.assign(new Error('Gateway WebSocket error mid-turn — in-flight answer lost; send your next message to reconnect'), { code: 'TRANSPORT' }) })
     const onAbort = () => push({ ok: false, abort: true })
+    // Interrupt-on-busy (see busy-interrupt.js): a new host user message → interrupt this request and end `stop`.
+    let busyFired = false
+    try { ctx.busy?.attach?.(() => { if (!busyFired) { busyFired = true; push({ ok: false, busy: true }) } }) } catch { /* ignore */ }
 
     ws.addEventListener('message', onMessage)
     ws.addEventListener('close', onClose)
@@ -681,7 +691,7 @@ export class GatewayTransport {
       if (reasoning.started) yield { type: 'block-end', index: reasoning.index, block: { type: 'reasoning', text: reasoning.body } }
       if (text.started) yield { type: 'block-end', index: text.index, block: { type: 'text', text: text.body } }
       if (usage && self.emitUsage && reason.kind !== 'error' && reason.kind !== 'aborted') yield { type: 'usage', usage }
-      try { ctx.onTurnEnd?.({ requestId, reason, pendingQuestion, text: text.body }) } catch { /* ignore */ }
+      try { ctx.onTurnEnd?.({ requestId, reason, pendingQuestion, text: text.body, ...(interrupted ? { interrupted: true } : {}) }) } catch { /* ignore */ }
       yield { type: 'finish', reason }
     }
 
@@ -727,6 +737,50 @@ export class GatewayTransport {
             } catch { /* ignore */ }
           }
           yield *finish({ kind: 'aborted', failure: { message: 'aborted', code: 'ABORTED' } })
+          return
+        }
+        if (item.busy) {
+          if (signal?.aborted) { push({ ok: false, abort: true }); continue }
+          // Already finishing (terminal final seen): let it end normally; the host delivers the message next.
+          if (terminalFinal) { emitEvent({ type: 'interrupt', intent: 'cancel', reason: 'busy-message', skipped: 'turn-finishing' }); continue }
+          const t0 = Date.now()
+          try {
+            ws.send(JSON.stringify({
+              type: 'req', id: `busy-${randomUUID()}`, method: CHAT.CANCEL,
+              params: { session_id: ctx.mapping?.jiuwenSessionId, intent: 'cancel', request_id: requestId },
+            }))
+          } catch { /* socket gone: the drop path below ends the turn */ }
+          this.noteCancel(ctx.mapping?.jiuwenSessionId, ctx.mapping)
+          emitEvent({ type: 'interrupt', intent: 'cancel', reason: 'busy-message' })
+          // Settle: wait for Jiuwen to confirm (interrupt_result / is_complete / stream.end) or the bound.
+          let by = 'timeout'
+          const until = t0 + this.interruptSettleMs
+          let aborted = false
+          while (Date.now() < until) {
+            if (!queue.length) {
+              let tm
+              await new Promise((r) => { wake = r; tm = setTimeout(r, Math.max(1, until - Date.now())) })
+              clearTimeout(tm); wake = undefined
+              continue
+            }
+            const it = queue.shift()
+            if (it.abort) { aborted = true; break }
+            if (!it.ok) { by = 'drop'; break }
+            const f = it.frame
+            if (f.type === 'res') { if (f.ok === false && String(f.id || '').startsWith('busy-')) { by = 'interrupt-rejected'; break } continue }
+            const pl = f.payload && typeof f.payload === 'object' ? f.payload : {}
+            const ev = normalizeEventName(f.event || pl.event_type)
+            if (ev === EVENTS.INTERRUPT_RESULT) { by = 'interrupt_result'; emitEvent({ type: 'interrupt_result', raw: pl }); break }
+            if (ev === EVENTS.STREAM_END || (ev === EVENTS.PROCESSING && pl.is_complete === true)) { by = ev; break }
+          }
+          if (aborted || signal?.aborted) {
+            yield *finish({ kind: 'aborted', failure: { message: 'aborted', code: 'ABORTED' } })
+            return
+          }
+          interrupted = true
+          try { ctx.busy?.settled?.({ by, chars: text.body.length, ms: Date.now() - t0 }) } catch { /* ignore */ }
+          yield *textDelta(`${text.body && !text.body.endsWith('\n') ? '\n\n' : ''}${INTERRUPTED_MARK}`)
+          yield *finish({ kind: 'stop' })
           return
         }
         if (!item.ok) {

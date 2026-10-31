@@ -205,6 +205,14 @@ export function resolveConfig(raw = {}, opts = {}) {
     /** How long to keep polling history for the dropped turn's final answer. */
     recoverWindowMs: Number(raw.recoverWindowMs ?? env.JIUWEN_RECOVER_WINDOW_MS ?? 15_000),
     postCancelSettleMs: Number(raw.postCancelSettleMs ?? env.JIUWEN_POST_CANCEL_SETTLE_MS ?? 1000),
+    /**
+     * A new user message reaches a host session whose Jiuwen turn is still running:
+     * 'interrupt' (default) = chat.interrupt the turn, then resend with the new message(s) coalesced
+     * into one step and a note that the previous turn was interrupted; 'queue' = wait for the turn to end.
+     */
+    onBusyMessage: pickEnum(env.JIUWEN_ON_BUSY_MESSAGE || raw.onBusyMessage, ['interrupt', 'queue'], 'interrupt'),
+    /** Max wait for chat.interrupt to settle before the resend (interrupt-on-busy). */
+    interruptSettleMs: Number(raw.interruptSettleMs ?? env.JIUWEN_INTERRUPT_SETTLE_MS ?? 8000),
     /** Host auxiliary calls (GenerateOptions.purpose): session-title → 'local' (instant heuristic) | 'jiuwen'. */
     titleMode: pickEnum(env.JIUWEN_TITLE_MODE || raw.titleMode, ['local', 'jiuwen'], 'local'),
     /**

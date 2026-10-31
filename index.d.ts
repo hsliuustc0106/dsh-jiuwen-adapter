@@ -85,6 +85,10 @@ export interface JiuwenAdapterConfig {
   trajectoryDetail?: 'summary' | 'full'
   ignoreMessagePatterns?: Array<string | RegExp>
   interruptOnAbort?: boolean
+  /** New user message on a session whose Jiuwen turn is running: interrupt + resend (default) or queue until it ends. Env JIUWEN_ON_BUSY_MESSAGE. */
+  onBusyMessage?: 'interrupt' | 'queue'
+  /** Max ms to wait for chat.interrupt to settle before the resend (default 8000). Env JIUWEN_INTERRUPT_SETTLE_MS. */
+  interruptSettleMs?: number
   llmAdapterModule?: string
   mappingPath?: string
   mcpRpcTimeoutMs?: number

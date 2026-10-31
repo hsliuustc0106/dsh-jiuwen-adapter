@@ -12,6 +12,7 @@ import { createJiuwenAdapter } from './adapter.js'
 import { createToolBridge } from './tool-bridge.js'
 import { GatewayTransport } from './gateway-transport.js'
 import { createInteractor } from './interaction.js'
+import { createBusyRegistry } from './busy-interrupt.js'
 import { createMcpBridge } from './mcp-bridge.js'
 import { denyJiuwenSideEffectTools } from './fs-route.js'
 import { createJiuwenCommand } from './commands.js'
@@ -101,7 +102,21 @@ export function apply(ctx, config = {}) {
   let hostSync
   const personaCfg = readConfig()
   const personaCapture = personaCfg.hostSync !== false && personaCfg.injectSystem === 'persona' ? createPersonaCapture(ctx, logger) : { get: () => undefined, dispose: () => {} }
+  // Interrupt-on-busy (onBusyMessage): generic, keyed by host session id via agent/inbox/inserted.
+  const busy = createBusyRegistry({
+    config: readConfig,
+    logger,
+    agentFor: (id) => { try { return service('agents')?.get?.(id) } catch { return undefined } },
+    trace: (rec) => { const f = readConfig().traceFile; if (f) { try { appendFileSync(f, `${JSON.stringify({ t: new Date().toISOString(), up: Math.round(performance.now()), ...rec })}\n`) } catch { /* ignore */ } } },
+    // Subscribed lazily on the first Jiuwen turn (hosts that never run one get no listener).
+    subscribe: (onMessage) => ctx.on?.('agent/inbox/inserted', ({ agent, message } = {}) => {
+      if (!agent?.id) return
+      const r = onMessage(String(agent.id), message)
+      if (r === 'interrupt' || r === 'deferred') logger?.info?.(`[dsh-jiuwen] new user message on busy session ${agent.id}: ${r === 'deferred' ? 'interrupt deferred until the pending approval resolves' : 'interrupting the running Jiuwen turn'}`)
+    }, { global: true }),
+  })
   const AdapterClass = createJiuwenAdapter(LlmAdapter, {
+    busy,
     personaFor: (id) => personaCapture.get(id),
     // Wait (bounded) for host→Jiuwen work a turn depends on: a fork remap, the first skill sync.
     awaitHostSync: async (id) => {
