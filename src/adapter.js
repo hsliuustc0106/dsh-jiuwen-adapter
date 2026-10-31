@@ -229,13 +229,15 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           }
           const trace = makeTrace(cfg.traceFile)
           let mcpName = cfg.mcpServerName
+          let mcpAttached = false
           if (!aux && cfg.toolPassthrough === 'mcp' && deps.mcpBridge && options.tools?.length) {
             const r = await deps.mcpBridge.prepare(options.tools, dshSessionId)
             mcpName = r?.mcpServerName || cfg.mcpServerName
             trace({ at: 'mcp-passthrough', exposed: deps.mcpBridge.exposed?.(dshSessionId) ?? deps.mcpBridge.exposed(), mcpServerName: mcpName, error: r?.error })
-            if (r && !r.error) overrides.mcp = [...(overrides.mcp || []), mcpName]
+            if (r && !r.error) { overrides.mcp = [...(overrides.mcp || []), mcpName]; mcpAttached = true }
           }
-          if (!aux && cfg.mapJiuwenFsToDsh && !turnMapping.pendingQuestion) {
+          // Only point the model at mcp_<server>_* when the passthrough server is actually attached this turn.
+          if (!aux && cfg.mapJiuwenFsToDsh && mcpAttached && !turnMapping.pendingQuestion) {
             const fs = applyFsRouteInjection(query, turnMapping, true, mcpName)
             query = fs.query
             if (fs.hash) turnMapping.fsRouteHash = fs.hash
