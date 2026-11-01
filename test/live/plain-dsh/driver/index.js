@@ -236,10 +236,14 @@ export function apply(ctx) {
         // Since be6b36a the adapter owns the global Jiuwen permissions it routes (perm-ledger: bash/write_file/edit_file and,
         // with dsh's subagent passed through, subagent_spawn/task_tool) and keeps them while routing is on; the sanctioned
         // way to hand them back is `/jiuwen permissions release confirm` (prior level, or the override removed).
+        let released = false
         { let rel; try { rel = await api.command(j.id, 'permissions release confirm') } catch (e) { err('perm release', e) }
-          ok('/jiuwen permissions release confirm restores the adapter-owned levels', /^Restored: /.test(String(rel?.text ?? rel ?? '')) && !/failed/.test(String(rel?.text ?? rel ?? '')), String(rel?.text ?? rel ?? '').slice(0, 160)) }
+          released = /^Restored: /.test(String(rel?.text ?? rel ?? '')) && !/failed/.test(String(rel?.text ?? rel ?? ''))
+          ok('/jiuwen permissions release confirm restores the adapter-owned levels', released, String(rel?.text ?? rel ?? '').slice(0, 160)) }
         if (hb0) await api.gateway.rpc('heartbeat.set_conf', hb0).catch(e => err('hb restore', e))
-        if (perm0) for (const [tool, v] of Object.entries(perm0.tools || perm0)) { const level = typeof v === 'string' ? v : v?.level; if (level && ['bash', 'write_file', 'edit_file'].includes(tool)) await api.gateway.rpc('permissions.tools.update', { tool, level }).catch(e => err('perm restore', e)) }
+        // Fallback only: with the adapter loaded first, perm0 already holds the adapter's own routed denies; writing them back
+        // after a release leaves un-owned denies behind (the next process's baseline then disagrees with its release).
+        if (perm0 && !released) for (const [tool, v] of Object.entries(perm0.tools || perm0)) { const level = typeof v === 'string' ? v : v?.level; if (level && ['bash', 'write_file', 'edit_file'].includes(tool)) await api.gateway.rpc('permissions.tools.update', { tool, level }).catch(e => err('perm restore', e)) }
         ok('heartbeat restored', JSON.stringify(await api.gateway.heartbeatConf().catch(() => null)) === JSON.stringify(hb0))
         { const permEnd = await api.gateway.rpc('permissions.tools.get', {}).catch(() => null)
           let base = perm0; try { const b = JSON.parse(require_fs().readFileSync(process.env.DRIVER_PERM_BEFORE, 'utf8')); if (b && typeof b === 'object') base = b } catch { /* own baseline */ }

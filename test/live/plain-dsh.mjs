@@ -180,7 +180,9 @@ try {
   const RAW_IDS = new Set(['id', 'fork']) // raw dsh session ids (random per run); the normalized events carry the rest
   const cmp = o => Object.fromEntries(Object.entries(o.plain || {}).filter(([k]) => !RAW_IDS.has(k)))
   const key = o => JSON.stringify(cmp(o))
-  const why = (a, b) => Object.keys({ ...cmp(a), ...cmp(b) }).filter(k => JSON.stringify(cmp(a)[k]) !== JSON.stringify(cmp(b)[k])).map(k => `${k}: ${JSON.stringify(a.plain?.[k]).slice(0, 200)} ≠ ${JSON.stringify(b.plain?.[k]).slice(0, 200)}`).join(' | ')
+  // Show each differing key from its first diverging character (the shared prefix hid the actual difference).
+  const at = (x, y) => { let i = 0; while (i < x.length && x[i] === y[i]) i++; return Math.max(0, i - 40) }
+  const why = (a, b) => Object.keys({ ...cmp(a), ...cmp(b) }).filter(k => JSON.stringify(cmp(a)[k]) !== JSON.stringify(cmp(b)[k])).map(k => { const x = JSON.stringify(cmp(a)[k]) ?? 'undefined', y = JSON.stringify(cmp(b)[k]) ?? 'undefined', i = at(x, y); return `${k} @${i}: …${x.slice(i, i + 240)} ≠ …${y.slice(i, i + 240)}` }).join(' | ')
   if (process.env.PLAIN_DSH_KEEP) writeFileSync(process.env.PLAIN_DSH_KEEP, JSON.stringify(R))
   for (const [k, o] of Object.entries(R)) check(`${k}: driver ran, no errors / unhandled rejections`, !o.err && !(o.errors || []).length && !(o.unhandled || []).length, o.err ? o.log : JSON.stringify([o.errors, o.unhandled]))
   check('(a) non-jiuwen session identical without / with adapter (adapter last)', key(R.pref) === key(R.pjwPlain), why(R.pref, R.pjwPlain))

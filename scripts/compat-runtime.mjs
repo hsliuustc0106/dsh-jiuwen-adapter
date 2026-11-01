@@ -241,6 +241,9 @@ if (has('--sync2')) {
   ;(await import('node:fs')).writeFileSync(join(sk, 'SKILL.md'), '---\nname: jw-probe-skill\ndescription: probe skill for the jiuwen sync test\n---\nMARKSKILLBODY follow the probe.\n')
   await load('dsh-skill')
   await load('dsh-skill-filesystem', { dshHome: join(home, 'dsh'), agentsHome: join(home, 'agents'), customSkillDirs: [join(home, 'skills')], bundledSkillDir: join(home, 'bundled') })
+  // The model-facing `skill` tool (real dsh loads it): hostSkillInject:index points Jiuwen at it as the loader
+  // (mcp_<server>_skill); without it the adapter correctly sends the index only, with no way to load a body.
+  await load('dsh-tool-skill')
 }
 if (!has('--no-deepseek')) await loadDeepseek()
 // --providers: other dsh provider plugins beside deepseek (pi-ai twin, deepseek-account); no keys, never called.
