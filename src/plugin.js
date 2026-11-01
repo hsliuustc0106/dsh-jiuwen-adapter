@@ -98,6 +98,10 @@ export function apply(ctx, config = {}) {
     }
     return r
   }
+  // Startup GC of stale per-session MCP proxies (background, fail-soft) before the first turn.
+  if (readConfig().toolPassthrough === 'mcp' && readConfig().mcpGcOnStart !== false) {
+    const gcTimer = setTimeout(() => { mcpBridge.startGc().catch?.(() => {}) }, 1000); gcTimer.unref?.()
+  }
   // Generic persona source (plain dsh personas); observe-only, off with hostSync:false or injectSystem!=persona.
   let hostSync
   const personaCfg = readConfig()

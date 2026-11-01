@@ -313,8 +313,9 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     const re = new RegExp(`^${esc}-([a-f0-9]{16})$`)
     const own = new Set([...sessions.values()].map(e => e.name))
     const removed = []
+    const victims = []
     for (const it of items) {
-      const name = String(it?.name || it?.id || it || '')
+      const name = String(it || '')
       const m = re.exec(name)
       if (!m || own.has(name)) continue
       const dir = join(rootStateDir(), 's', m[1])
@@ -322,11 +323,20 @@ export function createMcpBridge({ config, services, rpc, logger }) {
       try { st = statSync(dir) } catch { continue } // not ours (or already cleaned): never touch
       if (now - st.mtimeMs < grace) continue
       if (otherLiveEndpoints(dir) > 0) continue
-      try { await rpc('mcp.disconnect', { name }, { timeoutMs }) } catch { /* may be disconnected */ }
-      try { await rpc('mcp.delete_custom', { name }, { timeoutMs }) } catch (err) { logger?.debug?.(`[dsh-jiuwen] MCP GC delete ${name}: ${err?.message || err}`); continue }
-      try { rmSync(dir, { recursive: true, force: true }) } catch { /* ignore */ }
-      removed.push(name)
+      victims.push({ name, dir })
     }
+    // mcp.delete_custom already tears down a connected server (apply_mcp_change remove), so no
+    // separate mcp.disconnect; run a few deletes concurrently (each costs Jiuwen ~2s).
+    const conc = Math.max(1, Number(c.mcpGcConcurrency ?? 6))
+    let i = 0
+    await Promise.all(Array.from({ length: Math.min(conc, victims.length) }, async () => {
+      while (i < victims.length) {
+        const { name, dir } = victims[i++]
+        try { await rpc('mcp.delete_custom', { name }, { timeoutMs }) } catch (err) { logger?.debug?.(`[dsh-jiuwen] MCP GC delete ${name}: ${err?.message || err}`); continue }
+        try { rmSync(dir, { recursive: true, force: true }) } catch { /* ignore */ }
+        removed.push(name)
+      }
+    }))
     if (removed.length) logger?.info?.(`[dsh-jiuwen] removed ${removed.length} stale per-session MCP registration(s)`)
     return { removed }
   }
@@ -382,11 +392,8 @@ export function createMcpBridge({ config, services, rpc, logger }) {
       const lr = await startListen()
       if (lr?.error) return { error: lr.error, mcpServerName: e.name }
       startSweeper()
-      // Stale registrations are not just clutter: Jiuwen prewarms every connected MCP per new agent
-      // and indexes their tools for tool_search, so dead sessions' proxies cost spawns and pollute
-      // search hits. Wait (bounded) for the one-shot GC before the first registration.
+      // Normally already kicked off at plugin start (startGc); background, never delays the turn.
       if (!gcDone) { gcDone = gcStale().catch(() => ({})) }
-      await Promise.race([gcDone, new Promise(r => { const t = setTimeout(r, Number(c0.mcpGcWaitMs ?? 15_000)); t.unref?.() })])
       e.preparing = (e.preparing || 0) + 1
 
       const url = writeEp(e)
@@ -418,6 +425,9 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     sweepIdle,
     /** Startup GC of stale per-session registrations (runs once, in the background, on first prepare). */
     gcStale,
+    /** Kick the one-shot GC early (plugin start), so stale proxies are gone before the first agent
+     * is created: Jiuwen prewarms every connected MCP per new agent and indexes their tools. */
+    startGc() { if (!gcDone) gcDone = gcStale().catch(() => ({})); return gcDone },
 
     exposed: (sessionId) => {
       if (sessionId) return [...(sessions.get(sessionId)?.schemas.keys() || [])]
