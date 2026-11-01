@@ -297,9 +297,18 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     if (c.mcpGcOnStart === false) return { skipped: true }
     const timeoutMs = c.mcpRpcTimeoutMs ?? 30_000
     const grace = Number(c.mcpGcGraceMs ?? 120_000)
-    let listed
-    try { listed = await rpc('mcp.list', { filter: 'all' }, { timeoutMs }) } catch (err) { return { error: String(err?.message || err) } }
-    const items = Array.isArray(listed) ? listed : (listed?.items || listed?.servers || [])
+    // Custom MCPs are only listed under filter 'local' (Jiuwen treats unknown filters, e.g. 'all',
+    // as 'builtin' = marketplace packages only, which never contains our registrations). Union with
+    // Jiuwen's persisted state.json so GC still works if the RPC shape differs or fails.
+    const names = new Set()
+    let rpcErr
+    try {
+      const listed = await rpc('mcp.list', { filter: 'local' }, { timeoutMs })
+      for (const it of (Array.isArray(listed) ? listed : (listed?.items || listed?.servers || []))) names.add(String(it?.name || it?.id || it || ''))
+    } catch (err) { rpcErr = String(err?.message || err) }
+    for (const n of Object.keys(readJson(jiuwenState(), {})?.mcp || {})) names.add(n)
+    if (!names.size && rpcErr) return { error: rpcErr }
+    const items = [...names]
     const esc = String(c.mcpServerName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const re = new RegExp(`^${esc}-([a-f0-9]{16})$`)
     const own = new Set([...sessions.values()].map(e => e.name))
@@ -373,7 +382,11 @@ export function createMcpBridge({ config, services, rpc, logger }) {
       const lr = await startListen()
       if (lr?.error) return { error: lr.error, mcpServerName: e.name }
       startSweeper()
-      if (!gcDone) { gcDone = gcStale().catch(() => ({})) } // background: never delays the turn
+      // Stale registrations are not just clutter: Jiuwen prewarms every connected MCP per new agent
+      // and indexes their tools for tool_search, so dead sessions' proxies cost spawns and pollute
+      // search hits. Wait (bounded) for the one-shot GC before the first registration.
+      if (!gcDone) { gcDone = gcStale().catch(() => ({})) }
+      await Promise.race([gcDone, new Promise(r => { const t = setTimeout(r, Number(c0.mcpGcWaitMs ?? 15_000)); t.unref?.() })])
       e.preparing = (e.preparing || 0) + 1
 
       const url = writeEp(e)

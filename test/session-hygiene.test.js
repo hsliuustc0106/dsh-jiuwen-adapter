@@ -159,3 +159,15 @@ test('itemI: default allowlist is * (all host tools); core is opt-in with extras
   assert.deepEqual(off.b.exposed('j'), ['bash'])
   await b.dispose(); await off.b.dispose()
 })
+
+test('GC lists custom MCPs with filter local and falls back to Jiuwen state.json', async () => {
+  // Jiuwen maps unknown filters (e.g. 'all') to 'builtin', which never lists custom servers.
+  const { b, calls, c } = bridge({ mcpGcOnStart: true, mcpGcGraceMs: 1000 }, (m, p) => (m === 'mcp.list' ? { items: p.filter === 'local' ? [] : [] } : {}))
+  const old = (Date.now() - 3600_000) / 1000
+  const d = join(c.mcpStateDir, 's', 'f'.repeat(16)); mkdirSync(d, { recursive: true }); utimesSync(d, old, old)
+  writeFileSync(c.jiuwenMcpStateFile, JSON.stringify({ mcp: { ['dsh-tools-' + 'f'.repeat(16)]: { state: 'connected' } } }))
+  const r = await b.gcStale()
+  assert.equal(calls.find(x => x[0] === 'mcp.list')[1].filter, 'local')
+  assert.deepEqual(r.removed, ['dsh-tools-' + 'f'.repeat(16)])
+  await b.dispose()
+})
