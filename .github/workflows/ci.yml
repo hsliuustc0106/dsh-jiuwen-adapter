@@ -29,7 +29,7 @@ jobs:
             node: 24
     env:
       # No dsh packages here: the real-host / full-runtime suites skip themselves; mock-gateway tests always run.
-      DSH_NM: ${{ runner.temp }}/no-dsh
+      DSH_NM: /nonexistent/no-dsh
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
