@@ -74,6 +74,11 @@ export function otherLiveEndpoints(dir, selfFile) {
   return n
 }
 
+/** Did the host mark this tool schema for Jiuwen passthrough? */
+export function hostDeclaredPassthrough(t) {
+  return Boolean(t && (t.passthrough === true || t.meta?.jiuwenPassthrough === true || t.metadata?.jiuwenPassthrough === true))
+}
+
 export function matchesAllowlist(name, list) {
   return (list || []).some((p) => {
     if (p === '*') return true
@@ -121,7 +126,8 @@ export function createMcpBridge({ config, services, rpc, logger }) {
   async function callTool(sessionId, name, args) {
     const c = cfg()
     const e = sessions.get(sessionId)
-    if (!e?.schemas.has(name) || !matchesAllowlist(name, c.toolAllowlist)) {
+    // e.schemas only holds tools admitted at prepare() (allowlist or host-declared).
+    if (!e?.schemas.has(name)) {
       return { isError: true, text: `tool ${name} is not exposed by dsh (session=${sessionId})` }
     }
     const { tools, approval, agents } = services()
@@ -169,7 +175,7 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     }
     if (method === 'ping') return ok({})
     if (method === 'tools/list') {
-      const list = [...(e?.schemas.values() || [])].filter(s => matchesAllowlist(s.name, cfg().toolAllowlist))
+      const list = [...(e?.schemas.values() || [])]
         .map(s => ({ name: s.name, description: describeTool(s), inputSchema: s.parameters || s.inputSchema || { type: 'object', properties: {} } }))
       return ok({ tools: list })
     }
@@ -360,7 +366,8 @@ export function createMcpBridge({ config, services, rpc, logger }) {
       const e = ensureEntry(sessionId)
       e.lastUsed = Date.now()
       e.schemas.clear()
-      for (const t of tools || []) if (t?.name && matchesAllowlist(t.name, cfg().toolAllowlist)) e.schemas.set(t.name, t)
+      const c0 = cfg()
+      for (const t of tools || []) if (t?.name && (matchesAllowlist(t.name, c0.toolAllowlist) || (c0.toolHostDeclared !== false && hostDeclaredPassthrough(t)))) e.schemas.set(t.name, t)
       if (!e.schemas.size) return null
 
       const lr = await startListen()

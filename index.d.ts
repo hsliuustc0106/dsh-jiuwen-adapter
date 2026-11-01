@@ -161,6 +161,10 @@ export interface JiuwenAdapterConfig {
   terminalFinalGraceMs?: number
   titleMode?: string
   toolAllowlist?: string[]
+  /** Added to the default toolAllowlist (ignored when toolAllowlist is set). */
+  toolAllowlistExtra?: string[]
+  /** Also pass through host tools whose schema sets `passthrough: true` / `meta.jiuwenPassthrough` (default true). */
+  toolHostDeclared?: boolean
   toolApproval?: string
   toolApprovalExempt?: string[]
   toolCallTimeoutMs?: number

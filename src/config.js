@@ -48,6 +48,9 @@ const DEFAULT_MODELS = [
  * @param {{ env?: NodeJS.ProcessEnv, dshHome?: string }} [opts]
  * @returns {ResolvedConfig}
  */
+/** Default passthrough set: generic shell/file IO plus dsh's read-only session-query tools. */
+export const DEFAULT_PASSTHROUGH_TOOLS = Object.freeze(['bash', 'read', 'edit', 'write', 'glob', 'grep', 'session_search', 'session_event_search', 'session_event_read', 'session_trace', 'session_event_trace'])
+
 export function resolveConfig(raw = {}, opts = {}) {
   const env = opts.env ?? process.env
   // Product default is gateway (Jiuwen brain). openai only if explicitly requested.
@@ -156,10 +159,19 @@ export function resolveConfig(raw = {}, opts = {}) {
     approvalTimeoutMs: Number(raw.approvalTimeoutMs ?? env.JIUWEN_APPROVAL_TIMEOUT_MS ?? 300_000),
     /** dsh tools → Jiuwen: 'mcp' (default when hostSync on; allowlisted dsh tools as MCP) | 'off'. */
     toolPassthrough,
-    /** Tool names (exact, prefix*, or '*') exposed when toolPassthrough=mcp. Empty = none. */
+    /**
+     * Tool names (exact, prefix*, or '*') exposed when toolPassthrough=mcp. Default: the core shell/file
+     * tools, the skill loader and the read-only session tools, plus `toolAllowlistExtra` and any tool the
+     * host declares for passthrough (`passthrough: true` / `meta.jiuwenPassthrough` on its schema).
+     * '*' (every host tool) is opt-in. Empty = none.
+     */
     toolAllowlist: Array.isArray(raw.toolAllowlist) ? raw.toolAllowlist.map(String)
       : (env.JIUWEN_TOOL_ALLOWLIST ? env.JIUWEN_TOOL_ALLOWLIST.split(',').map(x => x.trim()).filter(Boolean)
-        : ((raw.hostSync === false || env.JIUWEN_HOST_SYNC === '0' || String(env.JIUWEN_TOOL_PASSTHROUGH || raw.toolPassthrough || '').toLowerCase() === 'off') ? [] : ['*'])),
+        : ((raw.hostSync === false || env.JIUWEN_HOST_SYNC === '0' || String(env.JIUWEN_TOOL_PASSTHROUGH || raw.toolPassthrough || '').toLowerCase() === 'off') ? []
+          : [...new Set([...DEFAULT_PASSTHROUGH_TOOLS, String(raw.skillLoaderTool || env.JIUWEN_SKILL_LOADER_TOOL || 'skill'),
+            ...(Array.isArray(raw.toolAllowlistExtra) ? raw.toolAllowlistExtra.map(String) : String(env.JIUWEN_TOOL_ALLOWLIST_EXTRA || '').split(',').map(x => x.trim()).filter(Boolean))])])),
+    /** Honour host-declared passthrough flags on tool schemas (in addition to toolAllowlist). */
+    toolHostDeclared: raw.toolHostDeclared !== false && env.JIUWEN_TOOL_HOST_DECLARED !== '0',
     /** 'dsh' (default): every passthrough call needs ctx.approval allowed-once (deny when unavailable) | 'none'. */
     toolApproval: pickEnum(env.JIUWEN_TOOL_APPROVAL || raw.toolApproval, ['dsh', 'none'], 'dsh'),
     /** Passthrough tools that skip the per-call approval gate: read-only dsh memory/session-query tools (dsh itself never asks for them). */
