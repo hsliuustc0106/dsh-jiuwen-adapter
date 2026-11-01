@@ -53,6 +53,9 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
+    "test:coverage": "node scripts/run-tests.mjs --coverage",
+    "test:baseline:update": "node scripts/run-tests.mjs --update-baseline",
+    "lint": "node scripts/check-syntax.mjs",
     "smoke": "node scripts/smoke.mjs",
     "mock:openai": "node bin/mock-openai.mjs",
     "mock:gateway": "node bin/mock-gateway.mjs",

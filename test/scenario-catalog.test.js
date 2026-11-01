@@ -60,11 +60,25 @@ export const SCENARIOS = [
   ['live /jiuwen command pass (rename, pause/resume, goal, workflows, history, btw, recap, supplement, skill-toggle, plan-status, compact, fork, archive, delete)', 'live', 'live /jiuwen commands'],
 ]
 
-test('scenario catalog: every scenario points at an existing test', () => {
+const SOURCES = { live: './live/run.mjs', 'live-plain-dsh': './live/plain-dsh.mjs' }
+/** Scenarios whose test file is missing or no longer contains the test's name / anchor. */
+export function missingScenarios(list = SCENARIOS) {
   const missing = []
-  for (const [name, file, needle] of SCENARIOS) {
-    const src = file === 'live' ? readFileSync(new URL('./live/run.mjs', import.meta.url), 'utf8') : file === 'live-plain-dsh' ? readFileSync(new URL('./live/plain-dsh.mjs', import.meta.url), 'utf8') : readFileSync(new URL(`./${file}.test.js`, import.meta.url), 'utf8')
-    if (!src.includes(needle)) missing.push(`${name} → ${file}: ${needle}`)
+  for (const [name, file, needle] of list) {
+    let src = ''
+    try { src = readFileSync(new URL(SOURCES[file] || `./${file}.test.js`, import.meta.url), 'utf8') } catch { /* missing file */ }
+    if (!needle || !src.includes(needle)) missing.push(`${name} → ${file}: ${needle}`)
   }
-  assert.deepEqual(missing, [])
+  return missing
+}
+
+test('scenario catalog: every scenario points at an existing test', () => {
+  assert.deepEqual(missingScenarios(), [])
+})
+
+test('scenario catalog guard: a scenario without a test is reported', () => {
+  assert.equal(missingScenarios([['ghost scenario', 'deep-pass', 'no test has this name 7f3a']]).length, 1)
+  assert.equal(missingScenarios([['ghost file', 'no-such-file', 'x']]).length, 1)
+  assert.equal(missingScenarios([['empty anchor', 'deep-pass', '']]).length, 1)
+  assert.ok(SCENARIOS.length >= 50, `catalog shrank to ${SCENARIOS.length} scenarios`)
 })

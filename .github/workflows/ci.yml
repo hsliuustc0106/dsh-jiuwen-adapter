@@ -4,35 +4,77 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
-    name: unit + mock gateway (node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+    name: test (node ${{ matrix.node }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         node: [22, 24]
+        include:
+          - os: macos-latest
+            node: 24
+    env:
+      # No dsh packages here: the real-host / full-runtime suites skip themselves; mock-gateway tests always run.
+      DSH_NM: ${{ runner.temp }}/no-dsh
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      # No dependencies to install: the adapter has none. Without the dsh packages the
-      # real-host / full-runtime suites skip themselves; the mock gateway tests always run.
-      - run: npm test
-        env:
-          DSH_NM: ${{ runner.temp }}/no-dsh
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Lint (node --check)
+        run: npm run lint
+      - name: npm test
+        run: npm test
+      - name: Coverage + test-count baseline
+        run: npm run test:coverage
+      - name: Live suites skip cleanly without JIUWEN_LIVE
+        shell: bash
+        run: |
+          set -euo pipefail
+          for s in test:live test:plain-dsh; do
+            out=$(env -u JIUWEN_LIVE npm run --silent "$s" 2>&1)
+            echo "$s → $out"
+            [[ "$out" == SKIP* ]] || { echo "::error::$s did not skip"; exit 1; }
+          done
       - name: npm pack --dry-run
+        if: matrix.os == 'ubuntu-latest'
         run: npm pack --dry-run
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-node${{ matrix.node }}-${{ matrix.os }}
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Job summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f reports/summary.json ]; then
+            node -e 'const s=require("./reports/summary.json");const c=s.coverage||{};console.log(`### node ${s.node} · ${process.env.RUNNER_OS}\n\n| tests | pass | fail | skipped | files | lines | branches | functions |\n|---|---|---|---|---|---|---|---|\n| ${s.tests} | ${s.pass} | ${s.fail} | ${s.skipped} | ${s.files} | ${c.lines}% | ${c.branches}% | ${c.functions}% |`)' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   compat:
     name: compat matrix (dsh ${{ matrix.dsh }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -47,11 +89,19 @@ jobs:
           mkdir -p "$RUNNER_TEMP/dsh" && cd "$RUNNER_TEMP/dsh"
           echo '{"private":true}' > package.json
           npm i --ignore-scripts --no-audit --no-fund "@deepseek-ai/dsh@${{ matrix.dsh }}"
-      - name: Full test suite against the real dsh runtime
-        run: npm test
+      - name: Full test suite against the real dsh runtime (+ baseline)
+        run: node scripts/run-tests.mjs
         env:
           DSH_NM: ${{ runner.temp }}/dsh/node_modules
       - name: Full-runtime A/B compat matrix
         run: node scripts/compat-matrix.mjs --diff
         env:
           DSH_NM: ${{ runner.temp }}/dsh/node_modules
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-compat-dsh${{ matrix.dsh }}
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
