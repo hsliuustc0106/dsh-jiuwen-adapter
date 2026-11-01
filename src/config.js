@@ -235,6 +235,8 @@ export function resolveConfig(raw = {}, opts = {}) {
     ignoreMessagePatterns: (Array.isArray(raw.ignoreMessagePatterns) ? raw.ignoreMessagePatterns : ['^Current runtime context\\.', '^Time sampled while preparing turn \\d+'])
       .map(p => { try { return new RegExp(String(p), 'm') } catch { return null } }).filter(Boolean),
     /** Forward the host system prompt to Jiuwen once per session (hash-gated): full (default, whole host prompt, any role) | persona | off. */
+    /** Host prompt knowledge (persona sections, group events): 'none' (default) | 'flybot' | custom object, see host-profiles.js. */
+    hostProfile: raw.hostProfile && typeof raw.hostProfile === 'object' ? raw.hostProfile : String(env.JIUWEN_HOST_PROFILE || raw.hostProfile || 'none'),
     injectSystem: pickEnum(env.JIUWEN_INJECT_SYSTEM || raw.injectSystem, ['off', 'persona', 'full'], 'full'),
     /** Byte cap for the forwarded host system prompt; longer text is cut with an explicit truncation marker. */
     injectSystemMaxBytes: (() => { const n = Number(env.JIUWEN_INJECT_SYSTEM_MAX_BYTES ?? raw.injectSystemMaxBytes); return Number.isFinite(n) && n >= 1024 ? Math.floor(n) : 64 * 1024 })(),

@@ -249,7 +249,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           // injectSystem (jiuwen sessions only; fail soft). Skipped for aux calls and ask_user answers.
           let systemHash, systemSections, skillInjectHash, fsRouteHash
       if (!aux && cfg.injectSystem !== 'off' && !turnMapping.pendingQuestion) {
-            const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId), cfg.injectSystemMaxBytes, cfg.injectSystemUpdate)
+            const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId), cfg.injectSystemMaxBytes, cfg.injectSystemUpdate, cfg.hostProfile)
             query = inj.query; systemHash = inj.hash; systemSections = inj.sections
             if (inj.hash) makeTrace(cfg.traceFile)({ at: 'system-inject', dshSessionId, mode: cfg.injectSystem, bytes: inj.bytes, updated: inj.updated, hash: inj.hash, ...(inj.delta ? { delta: true, fullBytes: inj.fullBytes } : {}) })
           }

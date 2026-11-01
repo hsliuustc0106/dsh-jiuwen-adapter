@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { resolveHostProfile } from './host-profiles.js'
 /**
  * Host → Jiuwen sync for jiuwen-provider sessions only.
  * Namespaced, fail-soft, feature-detected Gateway methods. Defaults ON via hostSync.
@@ -494,12 +495,13 @@ export function installHostSync(deps) {
   })
 
   // ── group member changes → force persona reinject (clear systemHash) ──
-  // FlyBot has no stable Cordis event; also clear when session event looks like group roster update.
+  // No stable host event for this: the event types come from the host profile (hostProfile.groupEvents).
   on('session/event', (session, event) => {
-    const f = resolveHostSyncFlags(config())
+    const cfg = config()
+    const f = resolveHostSyncFlags(cfg)
     if (!f.syncGroup) return
     const type = event?.type
-    if (type !== 'plugin:group' && type !== 'group/members' && type !== 'ds-bot/group') return
+    if (!resolveHostProfile(cfg.hostProfile).groupEvents.includes(type)) return
     const j = jiuwenSession(session)
     if (!j) return
     try { sessions.update(j.id, { systemHash: undefined }) } catch (e) { soft(logger, 'group.reinject', e) }

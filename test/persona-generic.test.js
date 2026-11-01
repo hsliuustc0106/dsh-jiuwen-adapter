@@ -19,8 +19,8 @@ test('generic persona: forwarded only when FlyBot markers absent and text is in 
 
 test('generic persona: FlyBot prompts unchanged (markers win, fallback ignored)', () => {
   const fly = '# Your identity\nYou are Ann.\n## How your Bot team works\nteam rules\n# Tools\nx'
-  const a = applySystemInjection('q', opts(fly), {}, 'persona')
-  const b = applySystemInjection('q', opts(fly), {}, 'persona', '# Your identity\nYou are Ann.')
+  const a = applySystemInjection('q', opts(fly), {}, 'persona', undefined, undefined, 'full', 'flybot')
+  const b = applySystemInjection('q', opts(fly), {}, 'persona', '# Your identity\nYou are Ann.', undefined, 'full', 'flybot')
   assert.deepEqual(a, b)
   assert.equal(extractPersona(fly), '# Your identity\nYou are Ann.')
 })
@@ -62,4 +62,16 @@ test('generic persona: interpolated {{vars}} forwarded as rendered; shipped web 
   assert.equal(genericPersona(sys, 'You are Bob, {{model}}.'), '')
   assert.equal(personaFromAssembly({ sections: [{ name: 'deployment:persona-prefix', text: 'You are a coding agent powered by the {{model}} model.' }] }), '')
   assert.equal(personaFromAssembly({ sections: [{ name: 'deployment:persona-prefix', text: 'You are a coding agent powered by the {{model}} model. Be terse.' }] }), 'You are a coding agent powered by the {{model}} model. Be terse.')
+})
+
+test('hostProfile: FlyBot sections only with hostProfile flybot (or a custom profile)', async () => {
+  const fly = '# Your identity\nYou are Ann.\n## How your Bot team works\nteam rules\n# Tools\nx'
+  assert.equal(applySystemInjection('q', opts(fly), {}, 'persona').query, 'q', 'generic default: no FlyBot knowledge')
+  assert.match(applySystemInjection('q', opts(fly), {}, 'persona', undefined, undefined, 'full', 'flybot').query, /You are Ann\.(?![\s\S]*team rules)/)
+  const custom = { personaSections: ['^# Tools$'] }
+  assert.match(applySystemInjection('q', opts(fly), {}, 'persona', undefined, undefined, 'full', custom).query, /# Tools\nx/)
+  const { resolveHostProfile } = await import('../src/host-profiles.js')
+  assert.deepEqual(resolveHostProfile('flybot').groupEvents, ['plugin:group', 'group/members', 'ds-bot/group'])
+  assert.deepEqual(resolveHostProfile(undefined).groupEvents, ['group/members'])
+  assert.equal(resolveHostProfile('nope').name, 'none')
 })

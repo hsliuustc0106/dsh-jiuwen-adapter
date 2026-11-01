@@ -72,10 +72,10 @@ test('applySystemInjection: off/no markers → unchanged; hash gates resend; lat
   const opts = { system: FLY, messages: user('hi') }
   assert.equal(applySystemInjection('hi', opts, {}, 'off').query, 'hi')
   assert.equal(applySystemInjection('hi', { system: 'x', messages: [] }, {}, 'persona').query, 'hi')
-  const a = applySystemInjection('hi', opts, { jiuwenSessionId: 'j' }, 'persona')
+  const a = applySystemInjection('hi', opts, { jiuwenSessionId: 'j' }, 'persona', undefined, undefined, 'full', 'flybot')
   assert.match(a.query, /^\[System instructions from host\]\n# Your identity[\s\S]*\[\/System\]\n\nhi$/)
-  assert.equal(applySystemInjection('hi', opts, { jiuwenSessionId: 'j', systemHash: a.hash }, 'persona').query, 'hi')
-  assert.notEqual(applySystemInjection('hi', opts, { jiuwenSessionId: 'k', systemHash: a.hash }, 'persona').hash, undefined)
+  assert.equal(applySystemInjection('hi', opts, { jiuwenSessionId: 'j', systemHash: a.hash }, 'persona', undefined, undefined, 'full', 'flybot').query, 'hi')
+  assert.notEqual(applySystemInjection('hi', opts, { jiuwenSessionId: 'k', systemHash: a.hash }, 'persona', undefined, undefined, 'full', 'flybot').hash, undefined)
   const f = applySystemInjection('hi', opts, {}, 'full'); assert.match(f.query, /cwd=\/tmp/)
   assert.equal(latestSystemText({ system: 'old', messages: [{ role: 'system', content: 'a' }, { role: 'user', content: 'u' }, { role: 'system', content: 'new' }] }), 'new')
   assert.ok(Buffer.byteLength(capBytes('é'.repeat(9000), 8192)) <= 8192)
@@ -93,7 +93,7 @@ test('config opt-outs: off / summary still valid via raw and env', () => {
 })
 
 test('live: persona sent once per Jiuwen session, resent on change', async () => {
-  const h = host({ injectSystem: 'persona' })
+  const h = host({ injectSystem: 'persona', hostProfile: 'flybot' })
   const t1 = await h.run({ sessionId: 'p1', system: FLY, messages: user('echo-params first') })
   assert.match(txt(t1), /System instructions from host/)
   const t2 = await h.run({ sessionId: 'p1', system: FLY, messages: [...user('echo-params first'), { role: 'assistant', content: 'x' }, ...user('echo-params second')] })

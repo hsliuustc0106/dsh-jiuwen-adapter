@@ -9,6 +9,7 @@
 import { createHash } from 'node:crypto'
 import { contentToText } from './messages.js'
 import { fsRouteHint } from './fs-route.js'
+import { extractProfilePersona } from './host-profiles.js'
 
 export const SYSTEM_OPEN = '[System instructions from host]'
 export const SYSTEM_CLOSE = '[/System]'
@@ -88,33 +89,9 @@ export function latestSystemText(options) {
   return typeof options?.system === 'string' ? options.system.trim() : ''
 }
 
-// FlyBot top-level sections we keep for 'persona' (core/src/host/prompt.js, groups.js).
-const PERSONA_H1 = [/^# Your identity\s*$/, /^# This group chat\s*$/]
-// FlyBot team/tool rules inside the identity section: everything from here on is host tooling.
-const IDENTITY_STOP = /^## (How your Bot team works|You are the Main Bot)\s*$/
-const LANGUAGE_LINE = /^- Reply in the user's language\.\s*$/m
-
-/** Persona/instructions/group/language part of a FlyBot system prompt ('' when no markers found). */
-export function extractPersona(system) {
-  const lines = String(system || '').split('\n')
-  const parts = []
-  let cur = null
-  const flush = () => { if (cur) { const t = cur.join('\n').trim(); if (t) parts.push(t) } cur = null }
-  let stopped = false
-  for (const line of lines) {
-    if (/^# /.test(line)) {
-      flush(); stopped = false
-      if (PERSONA_H1.some(r => r.test(line))) cur = [line]
-      continue
-    }
-    if (!cur || stopped) continue
-    if (IDENTITY_STOP.test(line)) { stopped = true; continue }
-    cur.push(line)
-  }
-  flush()
-  if (!parts.length) return ''
-  if (LANGUAGE_LINE.test(system)) parts.push("Reply in the user's language.")
-  return parts.join('\n\n')
+/** FlyBot persona extraction (compat export); the logic lives in host-profiles.js. */
+export function extractPersona(system, profile = 'flybot') {
+  return extractProfilePersona(system, profile)
 }
 
 /** dsh persona text (from persona-capture), forwarded only when it is literally in the current system prompt. */
@@ -149,13 +126,13 @@ export function systemHash(text) {
  * @returns {{ query: string, hash?: string }} query with the block prefixed when it is new for
  * this mapping (hash differs from mapping.systemHash); otherwise the query unchanged.
  */
-export function applySystemInjection(query, options, mapping, mode, fallbackPersona, maxBytes = SYSTEM_MAX_BYTES, updateMode = 'full') {
+export function applySystemInjection(query, options, mapping, mode, fallbackPersona, maxBytes = SYSTEM_MAX_BYTES, updateMode = 'full', hostProfile = 'none') {
   try {
     if (mode !== 'persona' && mode !== 'full') return { query }
     const sys = latestSystemText(options)
     if (!sys) return { query }
-    // persona: FlyBot markers first (unchanged); else the dsh persona sections, only if present in this prompt.
-    let body = mode === 'full' ? sys : extractPersona(sys)
+    // persona: the host profile's persona sections first (hostProfile), else the dsh persona sections, only if present in this prompt.
+    let body = mode === 'full' ? sys : extractProfilePersona(sys, hostProfile)
     if (!body && mode === 'persona') body = genericPersona(sys, fallbackPersona)
     if (!body) return { query }
     const capped = capBytes(body, maxBytes)
