@@ -61,6 +61,10 @@ What the live checks expect since be6b36a (#5). These are deliberate contract ch
 - Group roster re-injection needs `hostProfile.groupEvents`. There are none by default.
 - Passthrough tool calls run through dsh's own pipeline (`toolApproval: 'host'`), so Jiuwen gets what a native dsh session gets.
 - With FS routing (the default under MCP passthrough), permission presets do not re-level Jiuwen's routed `bash` / `write_file` / `edit_file`. The adapter owns those global levels, and `subagent_spawn` / `task_tool` too when dsh's subagent is passed through. It releases them with `/jiuwen permissions release confirm`.
+- plain-dsh runs several dsh processes against one Jiuwen and one permission ledger. A process keeps its owned denies while routing is on, and re-applies them on the next turn even after a release. So "permissions restored" compares the post-release state with the pre-process state where each ledger-owned entry is put back to its recorded prior (`test/live/perm-baseline.mjs`). The driver no longer writes its own start-of-run levels back after a successful release: with the adapter loaded first those were already the adapter's denies.
+- compat-runtime `--sync2` loads `dsh-tool-skill`, the `skill` tool that the index names as the loader. Without it the adapter correctly sends the index only.
+
+Unit tests and mocks bind port 0 (`test/helpers/spawn-mock-gateway.js`; `WebSocketServer({ port: 0 })` exposes `.port`; the stand-in prints its bound port). Never pick a fixed or random port range in a test: test files run in parallel.
 
 ## Layout
 
