@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows
 
 - **Host skills as an index** (`hostSkillInject: index`, default): name + description once per Jiuwen session, bodies on demand via the passthrough `skill` tool; hash persisted across restarts; generic secret redaction for any forwarded skill text. `body` keeps the old behaviour.
 - **Passthrough allowlist**: default stays `toolAllowlist: ['*']` (all host tools); new opt-in `toolAllowlist: 'core'` restricted set, with `toolAllowlistExtra` and host-declared `passthrough: true` tools.
+- **No host-specific profiles**: the built-in host-specific persona markers and group-event names are removed. `injectSystem: persona` uses the generic dsh persona source, or the sections named in an optional user-supplied `hostProfile` object (which also lists group-change event types for `syncGroup`; none by default).
 - **Incremental system prompt updates** (`injectSystemUpdate: diff`, opt-in; default `full`): section-level delta on change, full block otherwise; section hashes persisted on the mapping (no prompt text stored).
 - **`sessionOverrides`**: per-session-id glob knobs (model / chat mode / template), empty by default.
 
@@ -32,10 +33,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- `injectSystem: persona` also forwards plain dsh personas: the `deployment:persona-prefix/suffix` sections (dsh-system-prompt `personaPrefix/Suffix`, dsh-persona rows), observed read-only on the public `system-prompt/assemble` waterfall. FlyBot markers still win; dsh boilerplate is never sent. Off with `hostSync: false` or `injectSystem` ≠ `persona`.
+- `injectSystem: persona` also forwards plain dsh personas: the `deployment:persona-prefix/suffix` sections (dsh-system-prompt `personaPrefix/Suffix`, dsh-persona rows), observed read-only on the public `system-prompt/assemble` waterfall. dsh boilerplate is never sent. Off with `hostSync: false` or `injectSystem` ≠ `persona`.
 - `compat-runtime.mjs --sync2` (skills body, permission baseline, fork, delete idle/mid-turn, persona/group reinject, schedule→heartbeat with restore, MCP passthrough; read back from Jiuwen) and `--providers` (pi-ai + deepseek-account in the compat matrix).
 - `test/fuzz-gateway.test.js`: malformed/out-of-order/duplicate frames, unicode in tool args, rapid send/cancel, slow ack, id collisions.
-- **Host → Jiuwen sync** (`hostSync`, default on): forwards dsh/FlyBot frontend changes (skills, MCP, model, plan mode, workDir, title, session delete, goal, pause/resume, safe permission presets, fork remap, schedule→heartbeat, group persona reinject) to Jiuwen for jiuwen-provider sessions only. See `docs/host-sync.md`.
+- **Host → Jiuwen sync** (`hostSync`, default on): forwards dsh frontend changes (skills, MCP, model, plan mode, workDir, title, session delete, goal, pause/resume, safe permission presets, fork remap, schedule→heartbeat, group persona reinject) to Jiuwen for jiuwen-provider sessions only. See `docs/host-sync.md`.
 - dsh goal `resume` → Jiuwen `command.goal resume` (keeps the Jiuwen goal) when we paused it; else `set`.
 - `mcpVerify()` helper and `/jiuwen mcp` line for the dsh-tools passthrough (`mcp.show`; 0.2.7 `mcp.list` omits custom servers).
 - `scripts/live-deep.mjs` and `compat-runtime.mjs --sync/--reload` (live deep + real-runtime sync read-back).

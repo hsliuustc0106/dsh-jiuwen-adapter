@@ -8,7 +8,7 @@ test/helpers/mock-host.js mock-gateway on a random port + minimal Cordis-like ho
 test/fixtures/stand-in.mjs scripted OpenAI-compatible model (TAG/SLOW/REASON/HUGE/ERR500/ERRMID/TOOL:/MCP:)
 bin/mock-gateway.mjs      Gateway mock; a query with TAG: emulates Jiuwen in front of the stand-in
 test/live/run.mjs         npm run test:live (opt-in, real JiuwenSwarm)
-test/live/plain-dsh.mjs   npm run test:plain-dsh (opt-in, real dsh web profiles, no FlyBot)
+test/live/plain-dsh.mjs   npm run test:plain-dsh (opt-in, real dsh web profiles)
 test/live/plain-dsh/driver test-only dsh plugin that drives host services in a real profile
 test/live/lib.mjs         guards, stand-in launcher, Jiuwen snapshot + exact restore
 ```

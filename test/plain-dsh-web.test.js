@@ -1,4 +1,4 @@
-// Regressions from a real plain dsh web profile (base + web-app bundles, no FlyBot), 2026-10-31.
+// Regressions from a real plain dsh web profile (base + web-app bundles), 2026-10-31.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'

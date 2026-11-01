@@ -79,8 +79,8 @@ export interface JiuwenAdapterConfig {
   injectSystem?: 'off' | 'persona' | 'full'
   /** Byte cap for the forwarded host system prompt (default 65536); longer text gets a truncation marker. */
   injectSystemMaxBytes?: number
-  /** Host prompt profile for persona extraction and group events: 'none' (default), 'flybot', or a custom profile object. */
-  hostProfile?: 'none' | 'flybot' | { name?: string, personaSections?: Array<string | RegExp>, personaStop?: Array<string | RegExp>, personaAlways?: Array<{ match: string | RegExp, line: string }>, groupEvents?: string[] }
+  /** Optional host prompt profile: persona sections for injectSystem 'persona' and group-change event types (none by default). */
+  hostProfile?: { name?: string, personaSections?: Array<string | RegExp>, personaStop?: Array<string | RegExp>, personaAlways?: Array<{ match: string | RegExp, line: string }>, groupEvents?: string[] }
   /** Mid-session host system prompt change: resend everything (full, default) or only changed heading sections (diff, opt-in). */
   injectSystemUpdate?: 'diff' | 'full'
   /** Host skills Jiuwen lacks: index (default; name+description, bodies on demand via skillLoaderTool) | body | off. */

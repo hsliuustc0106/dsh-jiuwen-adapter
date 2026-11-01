@@ -1,5 +1,5 @@
 /**
- * Generic persona source for `injectSystem: persona` on plain dsh (no FlyBot markers).
+ * Generic persona source for `injectSystem: persona` on plain dsh (no host profile).
  * Observes the public `system-prompt/assemble` waterfall and remembers, per dsh session, the text of
  * the named persona sections (dsh-system-prompt `personaPrefix/Suffix`, dsh-persona rows).
  * Read-only: the listener returns the downstream assembly untouched, so other plugins are unaffected.

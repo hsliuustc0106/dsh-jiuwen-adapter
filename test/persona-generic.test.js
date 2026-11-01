@@ -6,7 +6,7 @@ import { createPersonaCapture, personaFromAssembly } from '../src/persona-captur
 const BOILER = 'You are an AI agent powered by DeepSeek Harness.\n\nCheck the [exit code: N] marker on every bash result.'
 const opts = sys => ({ messages: [{ role: 'system', content: sys }, { role: 'user', content: 'hi' }] })
 
-test('generic persona: forwarded only when FlyBot markers absent and text is in the prompt', () => {
+test('generic persona: forwarded only when no host-profile sections match and text is in the prompt', () => {
   const sys = `You are a pirate.\n\nSpeak in rhymes.\n\n${BOILER}\n\nAlways sign off.`
   const r = applySystemInjection('hi', opts(sys), {}, 'persona', 'You are a pirate.\n\nSpeak in rhymes.\n\nAlways sign off.')
   assert.match(r.query, /^\[System instructions from host\]\nYou are a pirate\.\n\nSpeak in rhymes\.\n\nAlways sign off\.\n\[\/System\]\n\nhi$/)
@@ -17,12 +17,14 @@ test('generic persona: forwarded only when FlyBot markers absent and text is in 
   assert.equal(applySystemInjection('hi', opts(sys), {}, 'off', 'You are a pirate.').query, 'hi')
 })
 
-test('generic persona: FlyBot prompts unchanged (markers win, fallback ignored)', () => {
-  const fly = '# Your identity\nYou are Ann.\n## How your Bot team works\nteam rules\n# Tools\nx'
-  const a = applySystemInjection('q', opts(fly), {}, 'persona', undefined, undefined, 'full', 'flybot')
-  const b = applySystemInjection('q', opts(fly), {}, 'persona', '# Your identity\nYou are Ann.', undefined, 'full', 'flybot')
+test('generic persona: host-profile sections win over the dsh persona fallback', () => {
+  const sys = '# Identity\nYou are Ann.\n## Team rules\nteam rules\n# Tools\nx'
+  const P = { personaSections: ['^# Identity$'], personaStop: ['^## Team rules$'] }
+  const a = applySystemInjection('q', opts(sys), {}, 'persona', undefined, undefined, 'full', P)
+  const b = applySystemInjection('q', opts(sys), {}, 'persona', '# Identity\nYou are Ann.', undefined, 'full', P)
   assert.deepEqual(a, b)
-  assert.equal(extractPersona(fly), '# Your identity\nYou are Ann.')
+  assert.equal(extractPersona(sys, P), '# Identity\nYou are Ann.')
+  assert.equal(extractPersona(sys), '', 'no built-in host profile')
 })
 
 test('generic persona: hash gate, cap, full mode unaffected', () => {
@@ -64,14 +66,12 @@ test('generic persona: interpolated {{vars}} forwarded as rendered; shipped web 
   assert.equal(personaFromAssembly({ sections: [{ name: 'deployment:persona-prefix', text: 'You are a coding agent powered by the {{model}} model. Be terse.' }] }), 'You are a coding agent powered by the {{model}} model. Be terse.')
 })
 
-test('hostProfile: FlyBot sections only with hostProfile flybot (or a custom profile)', async () => {
-  const fly = '# Your identity\nYou are Ann.\n## How your Bot team works\nteam rules\n# Tools\nx'
-  assert.equal(applySystemInjection('q', opts(fly), {}, 'persona').query, 'q', 'generic default: no FlyBot knowledge')
-  assert.match(applySystemInjection('q', opts(fly), {}, 'persona', undefined, undefined, 'full', 'flybot').query, /You are Ann\.(?![\s\S]*team rules)/)
-  const custom = { personaSections: ['^# Tools$'] }
-  assert.match(applySystemInjection('q', opts(fly), {}, 'persona', undefined, undefined, 'full', custom).query, /# Tools\nx/)
+test('hostProfile: no built-in profile; a custom object picks sections and group events', async () => {
+  const sys = '# Identity\nYou are Ann.\n# Tools\nx'
+  assert.equal(applySystemInjection('q', opts(sys), {}, 'persona').query, 'q', 'default: no host-specific knowledge')
+  assert.match(applySystemInjection('q', opts(sys), {}, 'persona', undefined, undefined, 'full', { personaSections: ['^# Tools$'] }).query, /# Tools\nx/)
   const { resolveHostProfile } = await import('../src/host-profiles.js')
-  assert.deepEqual(resolveHostProfile('flybot').groupEvents, ['plugin:group', 'group/members', 'ds-bot/group'])
-  assert.deepEqual(resolveHostProfile(undefined).groupEvents, ['group/members'])
-  assert.equal(resolveHostProfile('nope').name, 'none')
+  assert.deepEqual(resolveHostProfile(undefined).groupEvents, [])
+  assert.deepEqual(resolveHostProfile('anything').personaSections, [], 'string names are not profiles')
+  assert.deepEqual(resolveHostProfile({ groupEvents: ['h/g'] }).groupEvents, ['h/g'])
 })

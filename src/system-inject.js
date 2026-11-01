@@ -89,8 +89,8 @@ export function latestSystemText(options) {
   return typeof options?.system === 'string' ? options.system.trim() : ''
 }
 
-/** FlyBot persona extraction (compat export); the logic lives in host-profiles.js. */
-export function extractPersona(system, profile = 'flybot') {
+/** Persona sections of `system` per a user-supplied hostProfile (see host-profiles.js); '' without one. */
+export function extractPersona(system, profile) {
   return extractProfilePersona(system, profile)
 }
 
@@ -126,7 +126,7 @@ export function systemHash(text) {
  * @returns {{ query: string, hash?: string }} query with the block prefixed when it is new for
  * this mapping (hash differs from mapping.systemHash); otherwise the query unchanged.
  */
-export function applySystemInjection(query, options, mapping, mode, fallbackPersona, maxBytes = SYSTEM_MAX_BYTES, updateMode = 'full', hostProfile = 'none') {
+export function applySystemInjection(query, options, mapping, mode, fallbackPersona, maxBytes = SYSTEM_MAX_BYTES, updateMode = 'full', hostProfile = undefined) {
   try {
     if (mode !== 'persona' && mode !== 'full') return { query }
     const sys = latestSystemText(options)

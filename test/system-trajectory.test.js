@@ -52,30 +52,31 @@ after(() => { gw?.kill(); rmSync(dir, { recursive: true, force: true }) })
 import { extractPersona, applySystemInjection, latestSystemText, capBytes } from '../src/system-inject.js'
 import { resolveConfig as loadConfig } from '../src/config.js'
 
-const FLY = [
+const PROFILE = { personaSections: ['^# Identity\\s*$', '^# Group\\s*$'], personaStop: ['^## Team rules\\s*$'], personaAlways: [{ match: "^- Reply in the user's language\\.\\s*$", line: "Reply in the user's language." }], groupEvents: ['host/group-changed'] }
+const HOSTSYS = [
   '# Tools', 'bash: run commands', '',
-  '# Your identity', 'You are Ada, a Bot on the user\'s team in FlyBot. Your role: 编辑.', '', 'Write haiku only.', '',
-  '## How your Bot team works', '- Call list_bots whenever.', '- Reply in the user\'s language.', '',
-  '# This group chat', 'Members: the user and you.', '',
+  '# Identity', 'You are Ada, a bot on the user\'s team. Your role: 编辑.', '', 'Write haiku only.', '',
+  '## Team rules', '- Call list_bots whenever.', '- Reply in the user\'s language.', '',
+  '# Group', 'Members: the user and you.', '',
   '# Environment', 'cwd=/tmp',
 ].join('\n')
 
 test('extractPersona keeps identity/instructions/group/language, drops tool/env/team rules', () => {
-  const p = extractPersona(FLY)
-  assert.match(p, /You are Ada/); assert.match(p, /Write haiku only/); assert.match(p, /# This group chat/)
+  const p = extractPersona(HOSTSYS, PROFILE)
+  assert.match(p, /You are Ada/); assert.match(p, /Write haiku only/); assert.match(p, /# Group/)
   assert.match(p, /Reply in the user's language/)
   assert.doesNotMatch(p, /bash: run|list_bots|cwd=/)
-  assert.equal(extractPersona('plain system without markers'), '')
+  assert.equal(extractPersona('plain system without markers', PROFILE), '')
 })
 
 test('applySystemInjection: off/no markers → unchanged; hash gates resend; latest in-history system wins; cap', () => {
-  const opts = { system: FLY, messages: user('hi') }
+  const opts = { system: HOSTSYS, messages: user('hi') }
   assert.equal(applySystemInjection('hi', opts, {}, 'off').query, 'hi')
   assert.equal(applySystemInjection('hi', { system: 'x', messages: [] }, {}, 'persona').query, 'hi')
-  const a = applySystemInjection('hi', opts, { jiuwenSessionId: 'j' }, 'persona', undefined, undefined, 'full', 'flybot')
-  assert.match(a.query, /^\[System instructions from host\]\n# Your identity[\s\S]*\[\/System\]\n\nhi$/)
-  assert.equal(applySystemInjection('hi', opts, { jiuwenSessionId: 'j', systemHash: a.hash }, 'persona', undefined, undefined, 'full', 'flybot').query, 'hi')
-  assert.notEqual(applySystemInjection('hi', opts, { jiuwenSessionId: 'k', systemHash: a.hash }, 'persona', undefined, undefined, 'full', 'flybot').hash, undefined)
+  const a = applySystemInjection('hi', opts, { jiuwenSessionId: 'j' }, 'persona', undefined, undefined, 'full', PROFILE)
+  assert.match(a.query, /^\[System instructions from host\]\n# Identity[\s\S]*\[\/System\]\n\nhi$/)
+  assert.equal(applySystemInjection('hi', opts, { jiuwenSessionId: 'j', systemHash: a.hash }, 'persona', undefined, undefined, 'full', PROFILE).query, 'hi')
+  assert.notEqual(applySystemInjection('hi', opts, { jiuwenSessionId: 'k', systemHash: a.hash }, 'persona', undefined, undefined, 'full', PROFILE).hash, undefined)
   const f = applySystemInjection('hi', opts, {}, 'full'); assert.match(f.query, /cwd=\/tmp/)
   assert.equal(latestSystemText({ system: 'old', messages: [{ role: 'system', content: 'a' }, { role: 'user', content: 'u' }, { role: 'system', content: 'new' }] }), 'new')
   assert.ok(Buffer.byteLength(capBytes('é'.repeat(9000), 8192)) <= 8192)
@@ -93,12 +94,12 @@ test('config opt-outs: off / summary still valid via raw and env', () => {
 })
 
 test('live: persona sent once per Jiuwen session, resent on change', async () => {
-  const h = host({ injectSystem: 'persona', hostProfile: 'flybot' })
-  const t1 = await h.run({ sessionId: 'p1', system: FLY, messages: user('echo-params first') })
+  const h = host({ injectSystem: 'persona', hostProfile: PROFILE })
+  const t1 = await h.run({ sessionId: 'p1', system: HOSTSYS, messages: user('echo-params first') })
   assert.match(txt(t1), /System instructions from host/)
-  const t2 = await h.run({ sessionId: 'p1', system: FLY, messages: [...user('echo-params first'), { role: 'assistant', content: 'x' }, ...user('echo-params second')] })
+  const t2 = await h.run({ sessionId: 'p1', system: HOSTSYS, messages: [...user('echo-params first'), { role: 'assistant', content: 'x' }, ...user('echo-params second')] })
   assert.match(txt(t2), /query="echo-params second"/)
-  const t3 = await h.run({ sessionId: 'p1', system: FLY.replace('haiku', 'limericks'), messages: [...user('a'), { role: 'assistant', content: 'x' }, ...user('echo-params third')] })
+  const t3 = await h.run({ sessionId: 'p1', system: HOSTSYS.replace('haiku', 'limericks'), messages: [...user('a'), { role: 'assistant', content: 'x' }, ...user('echo-params third')] })
   assert.match(txt(t3), /limericks/)
 })
 
