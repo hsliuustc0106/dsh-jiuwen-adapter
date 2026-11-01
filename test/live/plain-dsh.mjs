@@ -10,7 +10,8 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, cpSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ROOT, GATEWAY, STANDIN_LOG, STANDIN_PORT, gatewayUp, skip, startStandin, sh, sleep, waitGateway, snapshot, restore } from './lib.mjs'
+import { ROOT, GATEWAY, STANDIN_LOG, STANDIN_PORT, gatewayUp, skip, startStandin, sh, sleep, waitGateway, snapshot, restore, jiuwenState } from './lib.mjs'
+import { permBaseline } from './perm-baseline.mjs'
 
 const nested = process.env.JIUWEN_LIVE_NESTED === '1'
 if (process.env.JIUWEN_LIVE !== '1') skip('set JIUWEN_LIVE=1')
@@ -85,7 +86,17 @@ async function run(name, mode) {
   // selectModel persists the default model; reset the patch before every run
   const trace = join(HOME, `trace-${name}-${mode}.jsonl`)
   writeFileSync(join(HOME, '.dsh/profiles', name, 'cordis.patch.yml'), PATCH + (name.startsWith('ext-') ? EXT_PATCH(name) : '') + (mode === 'busy' && !name.endsWith('pref') ? `- id: llm-jiuwen\n  config:\n    traceFile: ${trace}\n` : ''))
-  const env = { ...process.env, HOME, STANDIN_API_KEY: 'standin-no-secret', STANDIN_LOG, DRIVER_OUT: out, DRIVER_MODE: mode, DRIVER_CWD: join(HOME, 'sandbox') }
+  // Jiuwen's global permissions before this dsh process starts: with the adapter loaded first it owns (and denies) the
+  // routed tools before the driver could take its own baseline, so the driver compares its post-release state with this.
+  const permBefore = join(HOME, `perm-before-${name}-${mode}.json`)
+  // Adapter-owned entries left by an earlier process (routing keeps/re-applies them) count at their recorded prior,
+  // because that is what the release restores (perm-baseline.mjs).
+  try {
+    let ledger = null
+    try { ledger = JSON.parse(readFileSync(join(HOME, 'jiuwen-adapter/jiuwen-permissions.json'), 'utf8')) } catch { /* no ledger yet */ }
+    writeFileSync(permBefore, JSON.stringify(permBaseline((await jiuwenState()).perm ?? null, ledger)))
+  } catch { /* the driver falls back to its own baseline */ }
+  const env = { ...process.env, HOME, STANDIN_API_KEY: 'standin-no-secret', STANDIN_LOG, DRIVER_OUT: out, DRIVER_MODE: mode, DRIVER_CWD: join(HOME, 'sandbox'), DRIVER_PERM_BEFORE: permBefore }
   delete env.DSH_HOME
   const p = spawn(BIN, ['--profile', name, '--host', '127.0.0.1', '--port', String(PORT), '--no-open'], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
   let log = ''; p.stdout.on('data', d => { log += d }); p.stderr.on('data', d => { log += d })
@@ -111,8 +122,12 @@ function extChecks(X) {
     check(`ext ${k} jiuwen: turns + turn outline (dsh projection of Jiuwen turns)`, j.replies?.every(Boolean) && j.outline === 3, JSON.stringify(j).slice(0, 200))
     check(`ext ${k} jiuwen: dsh compaction runs locally — same Jiuwen session, no extra Jiuwen turn, next turn ok`, j.compact === 'object' && j.jwSame && j.msgAfter - j.msgBefore === 4 && /stand-in reply jx4/.test(j.afterCompact || ''), JSON.stringify({ c: j.compact, same: j.jwSame, m: [j.msgBefore, j.msgAfter], a: j.afterCompact }))
     check(`ext ${k} jiuwen: time-context is not forwarded (Jiuwen stamps its own)`, j.timeCtx?.every(x => x === false), JSON.stringify(j.timeCtx))
-    check(`ext ${k} jiuwen: mcp-client tool reaches Jiuwen via dsh-tools; approval-gated, bounded deny without UI`, /^mcp_dsh-tools(-[0-9a-f]{16})?_mcp__echo__echo$/.test(j.echo?.picked || '') && /dsh denied mcp__echo__echo/.test(j.echo?.reply || '') && j.echo?.ms < 20000, JSON.stringify(j.echo))
-    check(`ext ${k} jiuwen: auto-review preset → Jiuwen ask (was left at the previous level)`, j.perm?.ro === 'deny' && j.perm?.auto === 'ask', JSON.stringify(j.perm))
+    // Since be6b36a (toolApproval 'host'): a passthrough call runs through dsh's own tool pipeline, so Jiuwen gets
+    // what a native dsh session gets (the non-jiuwen phase above: echo:hi-p), not an adapter-side approval deny.
+    check(`ext ${k} jiuwen: mcp-client tool reaches Jiuwen via the per-session dsh-tools server and runs in dsh's pipeline like natively`, /^mcp_dsh-tools(-[0-9a-f]{16})?_mcp__echo__echo$/.test(j.echo?.picked || '') && /echo:hi-j/.test(j.echo?.reply || '') && /echo:hi-p/.test(o.ext?.p?.echo?.reply || '') && j.echo?.ms < 20000, JSON.stringify(j.echo))
+    // Since be6b36a: with FS routing (mapJiuwenFsToDsh, default with the MCP passthrough) presets no longer re-level
+    // Jiuwen's routed bash/write_file/edit_file — they stay denied and shell/file IO runs in dsh, where the preset applies.
+    check(`ext ${k} jiuwen: auto-review preset applies in dsh; Jiuwen's routed bash stays denied`, j.perm?.ro === 'deny' && j.perm?.auto === 'deny' && j.presetAuto === 'auto', JSON.stringify({ ...j.perm, dshPreset: j.presetAuto }))
     if (o.ext?.j) check(`ext ${k}: ralph / terminal / worktree / mcp-client tools published to Jiuwen`, ['create_worktree', 'mcp__echo__echo', 'ralph', 'terminal_open'].every(n => (o.ext?.schemas || []).includes(n)), JSON.stringify(o.ext?.schemas))
   }
   if (X.ref && X.last && X.first) check('ext (a) non-jiuwen results identical without / with adapter, both load orders', sig(X.ref) === sig(X.last) && sig(X.ref) === sig(X.first), [sig(X.ref), sig(X.last), sig(X.first)].join(' | '))

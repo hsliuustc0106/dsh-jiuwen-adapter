@@ -12,6 +12,7 @@
 # Env (box defaults): DSH_BIN, DSH_NM, JIUWEN_HOME (~/.jiuwenswarm), JIUWEN_GATEWAY_URL (ws://127.0.0.1:19000/ws),
 #   STANDIN_PORT (18999), GUARD_LOG_DIR (/workspace/guard-logs), GUARD_PROTECT_PORTS ("3335": FlyBot demo, never touched),
 #   GUARD_SKIP_SMOKE=1 (never run the real-model smoke), LEAK_TURNS (200).
+#   GUARD_ONLY=live|plain-dsh (run one suite only; the summary is marked partial and the run never counts as a full PASS).
 # Internal subcommands used as JW_USE_STANDIN_CMD / JW_RESTORE_CMD / GW_KILL / GW_START: __use-standin, __restore-real,
 #   __gw-kill, __gw-start (need GUARD_SNAP).
 set -uo pipefail
@@ -64,7 +65,7 @@ esac
 
 # ---- main ----
 DAY=$(date +%F); STAMP=$(date +%F-%H%M%S); T0=$(date +%s); START=$(date '+%F %H:%M')
-RUN_DIR="$LOG_ROOT/$STAMP"; SUMMARY="$LOG_ROOT/$DAY.md"
+RUN_DIR="$LOG_ROOT/$STAMP"; SUMMARY="$LOG_ROOT/$DAY${GUARD_ONLY:+-$GUARD_ONLY}.md"
 mkdir -p "$RUN_DIR/live" && chmod 755 "$LOG_ROOT" "$RUN_DIR" "$RUN_DIR/live" && export GUARD_RUN_DIR=$RUN_DIR
 exec > >(tee -a "$RUN_DIR/guard.log") 2>&1
 log "run dir $RUN_DIR (adapter $(git -C "$ROOT" rev-parse --short HEAD))"
@@ -143,8 +144,13 @@ run_suite() { # name logfile env...
 }
 LIVE_ENV=(LIVE_LOG_DIR="$RUN_DIR/live" LEAK_TURNS="${LEAK_TURNS:-200}" GW_KILL="bash '$SELF' __gw-kill" GW_START="bash '$SELF' __gw-start" DSH_BIN=)
 [ "$SMOKE" = run ] && LIVE_ENV+=(LIVE_SMOKE=1)
-run_suite test:live "$RUN_DIR/test-live.log" "${LIVE_ENV[@]}"; LIVE_RC=$?
-run_suite test:plain-dsh "$RUN_DIR/test-plain-dsh.log" DSH_BIN="$DSH_BIN"; PLAIN_RC=$?
+ONLY=${GUARD_ONLY:-}
+case $ONLY in ""|live|plain-dsh) ;; *) log "GUARD_ONLY must be live or plain-dsh"; exit 2 ;; esac
+skipped_suite() { printf 'SKIP  %s (GUARD_ONLY=%s)\n' "$1" "$ONLY" > "$2"; log "skip $1 (GUARD_ONLY=$ONLY)"; }
+if [ "$ONLY" = plain-dsh ]; then skipped_suite test:live "$RUN_DIR/test-live.log"; LIVE_RC=0
+else run_suite test:live "$RUN_DIR/test-live.log" "${LIVE_ENV[@]}"; LIVE_RC=$?; fi
+if [ "$ONLY" = live ]; then skipped_suite test:plain-dsh "$RUN_DIR/test-plain-dsh.log"; PLAIN_RC=0
+else run_suite test:plain-dsh "$RUN_DIR/test-plain-dsh.log" DSH_BIN="$DSH_BIN"; PLAIN_RC=$?; fi
 
 # 5. restore + verify
 [ -n "$STANDIN_PID" ] && { kill -- -"$STANDIN_PID" 2>/dev/null; STANDIN_PID=; }
@@ -176,6 +182,7 @@ LIVE_FAILS=$(fails_of "$RUN_DIR/test-live.log"); PLAIN_FAILS=$(fails_of "$RUN_DI
 LIVE_STEPS=$(grep -E '^(PASS|FAIL|SKIP|NOTE) ' "$RUN_DIR/test-live.log" | sed -E 's/\|/\\|/g; s/^(PASS|FAIL|SKIP|NOTE) +/| \1 | /; s/$/ |/')
 PLAIN_PASS=$(grep -cE '^PASS ' "$RUN_DIR/test-plain-dsh.log"); PLAIN_FAIL=$(grep -cE '^FAIL ' "$RUN_DIR/test-plain-dsh.log")
 STATUS=$([ ${#FAILS[@]} = 0 ] && echo PASS || echo FAIL)
+[ -n "$ONLY" ] && [ "$STATUS" = PASS ] && STATUS="PARTIAL PASS (GUARD_ONLY=$ONLY)"
 DUR=$(( ($(date +%s) - T0) / 60 ))
 {
   echo "# Live guard $DAY — $STATUS"
@@ -188,8 +195,10 @@ DUR=$(( ($(date +%s) - T0) / 60 ))
   echo
   echo "| Suite | Result | Count |"
   echo "|---|---|---|"
-  echo "| npm run test:live | $([ $LIVE_RC = 0 ] && echo PASS || echo FAIL) | $(counts "$RUN_DIR/test-live.log" | cut -d' ' -f2) steps |"
-  echo "| npm run test:plain-dsh (both load orders) | $([ $PLAIN_RC = 0 ] && echo PASS || echo FAIL) | $PLAIN_PASS pass / $PLAIN_FAIL fail |"
+  if [ "$ONLY" = plain-dsh ]; then echo "| npm run test:live | SKIP (GUARD_ONLY) | — |"
+  else echo "| npm run test:live | $([ $LIVE_RC = 0 ] && echo PASS || echo FAIL) | $(counts "$RUN_DIR/test-live.log" | cut -d' ' -f2) steps |"; fi
+  if [ "$ONLY" = live ]; then echo "| npm run test:plain-dsh (both load orders) | SKIP (GUARD_ONLY) | — |"
+  else echo "| npm run test:plain-dsh (both load orders) | $([ $PLAIN_RC = 0 ] && echo PASS || echo FAIL) | $PLAIN_PASS pass / $PLAIN_FAIL fail |"; fi
   echo
   echo "## test:live steps"
   echo
@@ -204,4 +213,4 @@ DUR=$(( ($(date +%s) - T0) / 60 ))
 chmod 644 "$SUMMARY"
 log "summary → $SUMMARY"
 log "RESULT $STATUS${FAILS:+ (${#FAILS[@]} failure(s))}"
-[ "$STATUS" = PASS ]
+[ "$STATUS" != FAIL ]

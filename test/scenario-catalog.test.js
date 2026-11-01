@@ -58,6 +58,9 @@ export const SCENARIOS = [
   ['mcp-client tool name in live ext phase: per-session dsh-tools-<sha16> server', 'live-plain-dsh', 'mcp_dsh-tools(-[0-9a-f]{16})?_mcp__echo__echo'],
   ['/jiuwen mcp + mcpVerify(sessionId) report the per-session passthrough server (fix)', 'mcp-bridge', "/jiuwen mcp reports this session"],
   ['live /jiuwen command pass (rename, pause/resume, goal, workflows, history, btw, recap, supplement, skill-toggle, plan-status, compact, fork, archive, delete)', 'live', 'live /jiuwen commands'],
+  ['guard-live 2026-11-01: the previous turn\'s late processing_status on a new socket does not end the next turn empty (fix, be6b36a regression)', 'turn-end-status', "previous turn\\'s late status on the new socket"],
+  ['guard-live 2026-11-01: live skill checks follow hostSkillInject:index (stand-in parses the adapter index block)', 'standin-skill-index', 'stand-in reads the adapter index block'],
+  ['guard-live 2026-11-01: plain-dsh "permissions restored" baseline counts adapter-owned entries left by an earlier process at their prior (harness fix)', 'perm-baseline', 'adapter-owned entries left by an earlier process'],
 ]
 
 const SOURCES = { live: './live/run.mjs', 'live-plain-dsh': './live/plain-dsh.mjs' }

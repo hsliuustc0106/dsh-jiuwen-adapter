@@ -32,7 +32,12 @@ http.createServer(async (req, res) => {
   const m = last.match(/SLOW(\d+)?/); const slowMs = m ? Number(m[1] || 8000) : 0
   const tag = (last.match(/TAG:(\S+)/) || [])[1] || 'x'
   const tm = grab(last, 'TOOL:')
-  log({ ...(/LISTTOOLS/.test(last) ? { tools, schemas: (j.tools||[]).filter(t=>/tool_call|tool_search|ask/.test(t.function?.name)).map(t=>t.function) } : {}), tag, stream: !!j.stream, nTools: tools.length, toolMsgs: toolMsgs.length, users: users.length, sysLen: sys.length, persona: /System instructions from host/.test(last), personaText: (last.match(/Deep Persona \w+/) || [])[0], marks: last.match(/MARK[A-Z0-9_]+/g) || [], allMarks: [...new Set(msgs.flatMap(m => textOf(m.content).match(/MARK[A-Z0-9_]+/g) || []))], toolNames: tools.filter(n => /memory|session_|search|ralph|terminal|worktree|echo/i.test(n)).slice(0, 40), timeCtx: /Time sampled while preparing turn|Current runtime context\./.test(last), busyNote: /previous turn was interrupted/.test(last), tags: last.match(/TAG:\S+/g) || [], testAgent: /You are a test agent/.test(last), boiler: /exit code: N|DeepSeek Harness/.test(last), last: last.slice(0, 160) })
+  // hostSkillInject:index (default since be6b36a): the skills listed in the index block, the loader tool it names, and whether that tool is offered
+  const idx = (last.replace(/\\n/g, '\n').match(/\[Host skills available[^\]]*\]\n([\s\S]*?)\[\/Host skills\]/) || [])[1] || ''
+  const skillIndex = [...idx.matchAll(/^- ([\w.-]+):/gm)].map(x => x[1])
+  const skillLoader = (idx.match(/by calling (\S+) with the skill name/) || [])[1]
+  const skillLoaderOffered = Boolean(skillLoader) && tools.includes(skillLoader)
+  log({ ...(/LISTTOOLS/.test(last) ? { tools, schemas: (j.tools||[]).filter(t=>/tool_call|tool_search|ask/.test(t.function?.name)).map(t=>t.function) } : {}), tag, ...(skillIndex.length ? { skillIndex, skillLoader, skillLoaderOffered } : {}), stream: !!j.stream, nTools: tools.length, toolMsgs: toolMsgs.length, users: users.length, sysLen: sys.length, persona: /System instructions from host/.test(last), personaText: (last.match(/Deep Persona \w+/) || [])[0], marks: last.match(/MARK[A-Z0-9_]+/g) || [], allMarks: [...new Set(msgs.flatMap(m => textOf(m.content).match(/MARK[A-Z0-9_]+/g) || []))], toolNames: tools.filter(n => /memory|session_|search|ralph|terminal|worktree|echo/i.test(n)).slice(0, 40), timeCtx: /Time sampled while preparing turn|Current runtime context\./.test(last), busyNote: /previous turn was interrupted/.test(last), tags: last.match(/TAG:\S+/g) || [], testAgent: /You are a test agent/.test(last), boiler: /exit code: N|DeepSeek Harness/.test(last), last: last.slice(0, 160) })
   if (/ERR500/.test(last)) { res.writeHead(500, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: { message: 'stand-in scripted 500', type: 'server_error' } })) }
   let toolCall
   if (tm && toolMsgs.length === 0) {
@@ -77,4 +82,4 @@ http.createServer(async (req, res) => {
   }
   res.write(`data: ${JSON.stringify({ id: 'c1', object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })}\n\n`)
   res.end('data: [DONE]\n\n')
-}).listen(port, '127.0.0.1', () => console.log('stand-in on', port))
+}).listen(port, '127.0.0.1', function () { console.log('stand-in on', this.address().port) })

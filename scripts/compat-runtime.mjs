@@ -137,7 +137,8 @@ async function loadHarnessPlugins() {
 const jw = []
 async function loadJiuwen() {
   const plugin = await import(pathToFileURL(join(ROOT, 'index.js')).href)
-  jw.push(ctx.plugin(plugin, { gatewayURL: GW, mappingPath: join(home, 'jw-a.json'), requestTimeoutMs: 60_000, mode: 'gateway' }))
+  // hostProfile.groupEvents: the host declares which session event means "group roster changed" (none by default since be6b36a)
+    jw.push(ctx.plugin(plugin, { gatewayURL: GW, mappingPath: join(home, 'jw-a.json'), requestTimeoutMs: 60_000, mode: 'gateway', hostProfile: { groupEvents: ['group/members'] } }))
   if (TWO) jw.push(ctx.plugin(plugin, { gatewayURL: GW, mappingPath: join(home, 'jw-b.json'), provider: 'jiuwen-b', commandName: 'jwb', serviceName: 'jiuwenAdapterB', mode: 'gateway' }))
   await tick(500)
 }
@@ -324,22 +325,35 @@ if (WITH && has('--sync') && api && !GW.includes(':1/')) syncOut = await (async 
     ok('workdir → mapping.projectDir', pd, api.sessions.get(sid)?.projectDir)
     // goal lifecycle (read back from Jiuwen command.goal get)
     const goals = ctx.get('goals')
-    const created = goals.create(agent, { objective: 'sync goal objective', maxGoalRounds: 5 })
-    const g1 = await wait(async () => (await goalOf())?.objective === 'sync goal objective' && (await goalOf()))
-    ok('goal create → Jiuwen goal set', !!g1, JSON.stringify(g1)?.slice(0, 120))
-    await tick(300)
-    let snap = created
-    const ref = () => { const g = snap?.goal ?? snap; return { id: g.id, revision: g.revision } }
-    try { snap = goals.pause(agent, ref()) } catch (e) { ok('goal pause (dsh)', false, e.message) }
-    const g2 = await wait(async () => (await goalOf())?.status === 'paused')
-    ok('goal pause → Jiuwen paused', g2, (await goalOf())?.status)
-    const before = (await goalOf())?.goal_id
-    try { snap = goals.resume(agent, ref()) } catch (e) { ok('goal resume (dsh)', false, e.message) }
-    const g3 = await wait(async () => (await goalOf())?.status === 'active')
-    ok('goal resume → Jiuwen active, same goal', g3 && (await goalOf())?.goal_id === before, `${(await goalOf())?.status} ${(await goalOf())?.goal_id}/${before}`)
-    try { goals.clear(agent, ref()) } catch (e) { ok('goal clear (dsh)', false, e.message) }
-    const g4 = await wait(async () => !(await goalOf()))
-    ok('goal clear → Jiuwen no goal', g4)
+    // dsh's own goal service owns the revision; its round driver bumps it, so always act on a fresh ref.
+    const ref = () => { const v = goals.get(agent); const g = v?.goal ?? v; return { id: g.id, revision: g.revision } }
+    const dshGoal = () => { const v = goals.get(agent); return v?.goal ?? v }
+    // Since be6b36a: with dsh's goal tools passed through (default toolAllowlist '*'), the goal lives in dsh
+    // only and Jiuwen's own goal is never armed (two drivers gave a one-way completion); only clear is forwarded.
+    const routed = Boolean(ctx.get('tools')?.get?.('update_goal'))
+    goals.create(agent, { objective: 'sync goal objective', maxGoalRounds: 5 })
+    // Pause in the same tick, before dsh's round driver starts a round.
+    try { goals.pause(agent, ref()) } catch (e) { ok('goal pause (dsh)', false, e.message) }
+    if (routed) {
+      await tick(1500)
+      ok('goal create + pause: dsh goal paused, Jiuwen goal not armed (dsh goal tools routed)', dshGoal()?.phase === 'paused' && !(await goalOf()), JSON.stringify({ dsh: dshGoal()?.phase, jw: (await goalOf())?.status }))
+      try { goals.resume(agent, ref()) } catch (e) { ok('goal resume (dsh)', false, e.message) }
+      await tick(1500)
+      ok('goal resume: dsh goal resumed, Jiuwen still has no goal of its own', ['active', 'blocked', 'complete'].includes(dshGoal()?.phase) && !(await goalOf()), JSON.stringify({ dsh: dshGoal()?.phase, jw: (await goalOf())?.status }))
+      try { if (dshGoal()) goals.clear(agent, ref()) } catch (e) { ok('goal clear (dsh)', false, e.message) }
+      const g4 = await wait(async () => !dshGoal() && !(await goalOf()))
+      ok('goal clear → no goal in dsh or Jiuwen', g4)
+    } else {
+      const g2 = await wait(async () => (await goalOf())?.status === 'paused')
+      ok('goal create + pause → Jiuwen goal set and paused', g2 && (await goalOf())?.objective === 'sync goal objective', JSON.stringify(await goalOf())?.slice(0, 120))
+      const before = (await goalOf())?.goal_id
+      try { goals.resume(agent, ref()) } catch (e) { ok('goal resume (dsh)', false, e.message) }
+      const g3 = await wait(async () => (await goalOf())?.status === 'active')
+      ok('goal resume → Jiuwen active, same goal', g3 && (await goalOf())?.goal_id === before, `${(await goalOf())?.status} ${(await goalOf())?.goal_id}/${before}`)
+      try { goals.clear(agent, ref()) } catch (e) { ok('goal clear (dsh)', false, e.message) }
+      const g4 = await wait(async () => !(await goalOf()))
+      ok('goal clear → Jiuwen no goal', g4)
+    }
     await Promise.race([agent.whenIdle(), tick(30_000)])
     // persona change → reinjected; second turn still on the same Jiuwen session
     const jw1 = api.sessions.get(sid)?.jiuwenSessionId
@@ -397,7 +411,9 @@ if (WITH && has('--sync2') && api && !GW.includes(':1/')) sync2Out = await (asyn
       ok('skills: body queued on mapping (unknown to Jiuwen)', (m?.skillBodies || []).some(b => b.name === 'jw-probe-skill'), JSON.stringify(m?.skillBodies || []).slice(0, 100))
       await sayOn(hp.agent, `TAG:k1${stamp} use skill`)
       const k1 = byTag(`k1${stamp}`).at(-1)
-      ok('skills: body reached the model input (first turn after sync)', [byTag(`p1${stamp}`).at(-1), k1].some(x => (x?.marks || []).includes('MARKSKILLBODY')), JSON.stringify(k1?.marks || []))
+      // hostSkillInject: index (default since be6b36a) sends name + description and the loader tool, not the body; body = explicit mode.
+      const reached = x => (x?.marks || []).includes('MARKSKILLBODY') || ((x?.skillIndex || []).includes('jw-probe-skill') && /_skill$/.test(x?.skillLoader || ''))
+      ok('skills: skill reached the model input (index + loader tool, or body) on the first turn after sync', [byTag(`p1${stamp}`).at(-1), k1].some(reached), JSON.stringify({ marks: k1?.marks, index: k1?.skillIndex, loader: k1?.skillLoader }))
     }
 
     // ── permission preset: seeded baseline is recorded, never flips Jiuwen global levels ──
@@ -483,7 +499,8 @@ if (WITH && has('--reload') && !GW.includes(':1/')) reloadOut = await (async () 
     await tick(300)
     if (i === 1) l0 = snapL() // baseline: no adapter loaded
     const gone = !ctx.llm.listProviders().some(p => p.id === 'jiuwen') && ctx.get('jiuwenAdapter') === undefined
-    jw.push(ctx.plugin(plugin, { gatewayURL: GW, mappingPath: join(home, 'jw-a.json'), requestTimeoutMs: 60_000, mode: 'gateway' }))
+    // hostProfile.groupEvents: the host declares which session event means "group roster changed" (none by default since be6b36a)
+    jw.push(ctx.plugin(plugin, { gatewayURL: GW, mappingPath: join(home, 'jw-a.json'), requestTimeoutMs: 60_000, mode: 'gateway', hostProfile: { groupEvents: ['group/members'] } }))
     await tick(500)
     const back = ctx.llm.listProviders().filter(p => p.id === 'jiuwen').length === 1 && ctx.get('jiuwenAdapter') !== undefined
     const sid = `jw-reload-${i}-${Date.now().toString(36)}`; JW_SIDS.add(sid)

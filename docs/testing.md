@@ -52,6 +52,16 @@ JIUWEN_LIVE=1 … npm run test:live      # live suites, see below (they SKIP wit
 
 Exit codes: `0` pass, `1` failure, `2` preflight (no Gateway / dsh). An interrupted run restores Jiuwen from the snapshot on exit.
 
+`GUARD_ONLY=live` or `GUARD_ONLY=plain-dsh` runs one suite under the same snapshot / stand-in / restore, for iterating on a failure. It writes `<date>-<suite>.md` and reports `PARTIAL PASS`, never a full `PASS`. Use the full run to sign off.
+
+What the live checks expect since be6b36a (#5). These are deliberate contract changes, not regressions:
+
+- Skills Jiuwen lacks reach it as an index by default (`hostSkillInject: index`): name and description, plus the loader tool `mcp_<server>_skill`. The body is sent only in `body` mode. The stand-in logs `skillIndex` / `skillLoader` / `skillLoaderOffered` (test/standin-skill-index.test.js).
+- With dsh's goal tools passed through, the goal lives in dsh only. Jiuwen's own goal is never armed, and dsh's round driver keeps bumping the goal revision, so tests act on a fresh `goals.get()` ref.
+- Group roster re-injection needs `hostProfile.groupEvents`. There are none by default.
+- Passthrough tool calls run through dsh's own pipeline (`toolApproval: 'host'`), so Jiuwen gets what a native dsh session gets.
+- With FS routing (the default under MCP passthrough), permission presets do not re-level Jiuwen's routed `bash` / `write_file` / `edit_file`. The adapter owns those global levels, and `subagent_spawn` / `task_tool` too when dsh's subagent is passed through. It releases them with `/jiuwen permissions release confirm`.
+
 ## Layout
 
 ```

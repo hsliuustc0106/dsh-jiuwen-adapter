@@ -215,7 +215,10 @@ export function apply(ctx) {
         const hb1 = await api.gateway.heartbeatConf().catch(() => null)
         ok('dsh-schedule every 7200 → Jiuwen heartbeat', Number(hb1?.every) === 7200, JSON.stringify(hb1))
         const perm1 = await api.gateway.rpc('permissions.tools.get', {}).catch(() => null)
-        ok('dsh-permission-presets read-only → Jiuwen bash/write/edit deny (explicit change)', JSON.stringify(perm1) !== JSON.stringify(perm0) && /deny/.test(JSON.stringify(perm1)), JSON.stringify(perm1).slice(0, 160))
+        // FS routing (default with the MCP passthrough) denies Jiuwen's bash/write_file/edit_file itself (adapter-first: already at
+        // plugin start, so no observable "change"); presets no longer re-level them (be6b36a). Either way read-only → all three deny.
+        { const lv = t => { const v = perm1?.tools?.[t]; return typeof v === 'string' ? v : v?.level }
+          ok('dsh-permission-presets read-only → Jiuwen bash/write/edit deny', ['bash', 'write_file', 'edit_file'].every(t => lv(t) === 'deny'), JSON.stringify(['bash', 'write_file', 'edit_file'].map(lv))) }
         const fm = api.sessions.get(j.fork)
         ok('session controller fork → Jiuwen fork', fm?.forkedFrom === m?.jiuwenSessionId && rows.concat((await api.gateway.rpc('session.list', { limit: 200 }))?.sessions || []).some(x => x.session_id === fm?.jiuwenSessionId), JSON.stringify(fm || {}).slice(0, 160))
         ok('fork turn on Jiuwen fork', /stand-in reply jwf/.test(j.forkReply || ''), j.forkReply)
@@ -230,13 +233,21 @@ export function apply(ctx) {
         ok('agent dispose keeps the Jiuwen session + mapping', rows2.some(x => x.session_id === m.jiuwenSessionId) && !!api.sessions.get(j.id), m.jiuwenSessionId)
         ok('archive keeps the Jiuwen fork', rows2.some(x => x.session_id === fm?.jiuwenSessionId), fm?.jiuwenSessionId)
         // restore Jiuwen globals touched by sync
+        // Since be6b36a the adapter owns the global Jiuwen permissions it routes (perm-ledger: bash/write_file/edit_file and,
+        // with dsh's subagent passed through, subagent_spawn/task_tool) and keeps them while routing is on; the sanctioned
+        // way to hand them back is `/jiuwen permissions release confirm` (prior level, or the override removed).
+        { let rel; try { rel = await api.command(j.id, 'permissions release confirm') } catch (e) { err('perm release', e) }
+          ok('/jiuwen permissions release confirm restores the adapter-owned levels', /^Restored: /.test(String(rel?.text ?? rel ?? '')) && !/failed/.test(String(rel?.text ?? rel ?? '')), String(rel?.text ?? rel ?? '').slice(0, 160)) }
         if (hb0) await api.gateway.rpc('heartbeat.set_conf', hb0).catch(e => err('hb restore', e))
         if (perm0) for (const [tool, v] of Object.entries(perm0.tools || perm0)) { const level = typeof v === 'string' ? v : v?.level; if (level && ['bash', 'write_file', 'edit_file'].includes(tool)) await api.gateway.rpc('permissions.tools.update', { tool, level }).catch(e => err('perm restore', e)) }
         ok('heartbeat restored', JSON.stringify(await api.gateway.heartbeatConf().catch(() => null)) === JSON.stringify(hb0))
-        ok('permissions restored', JSON.stringify(await api.gateway.rpc('permissions.tools.get', {}).catch(() => null)) === JSON.stringify(perm0))
+        { const permEnd = await api.gateway.rpc('permissions.tools.get', {}).catch(() => null)
+          let base = perm0; try { const b = JSON.parse(require_fs().readFileSync(process.env.DRIVER_PERM_BEFORE, 'utf8')); if (b && typeof b === 'object') base = b } catch { /* own baseline */ }
+          const t0 = base?.tools || {}, t1 = permEnd?.tools || {}
+          ok('permissions restored (as before this dsh process started)', JSON.stringify(t1) === JSON.stringify(t0), Object.keys({ ...t0, ...t1 }).filter(k => JSON.stringify(t0[k]) !== JSON.stringify(t1[k])).map(k => `${k}:${JSON.stringify(t0[k])}→${JSON.stringify(t1[k])}`).join(' ') || 'non-tool keys differ') }
         const sl = (() => { try { return require_fs().readFileSync((process.env.STANDIN_LOG || '/tmp/standin.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return {} } }) } catch { return [] } })()
         const t1 = sl.filter(x => x.tag === 'jw1').at(-1), t2 = sl.filter(x => x.tag === 'jw2').at(-1), tf = sl.filter(x => x.tag === 'jwf').at(-1)
-                ok('agent-preset skill body (dsh-skill-filesystem) reaches Jiuwen', [t1, t2].some(t => (t?.marks || []).includes('MARKSKILLBODY')), JSON.stringify([t1?.marks, t2?.marks]))
+                ok('agent-preset skill (dsh-skill-filesystem) reaches Jiuwen (index + loader tool by default, or body)', [t1, t2].some(t => (t?.marks || []).includes('MARKSKILLBODY') || ((t?.skillIndex || []).includes('plain-probe-skill') && /_skill$/.test(t?.skillLoader || ''))), JSON.stringify([t1?.marks, t1?.skillIndex, t1?.skillLoader, t2?.marks]))
         ok('fork turn continues the Jiuwen fork (not a transcript resend)', tf && !/user: /.test(tf.last || '') && tf.users > 2, JSON.stringify({ users: tf?.users, last: (tf?.last || '').slice(-80) }))
         try {
           const { sessionId: mid } = await sc.create({ cwd: SANDBOX, agentPreset: 'minimal' }, new AbortController().signal)
