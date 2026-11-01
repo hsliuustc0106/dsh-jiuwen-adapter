@@ -40,10 +40,12 @@ const REJECT_LABEL = 'Reject'
  *   outcome 'answered' | 'timeout' | 'cancelled' | 'unavailable'; never throws.
  */
 async function askCard(userQuestions, agent, item, ms, signal) {
+  const own = linkedAbort(signal)
   try {
-    const ask = Promise.resolve(userQuestions.ask({ questions: [item], ...(agent ? { agent } : {}), ...(signal ? { signal } : {}) }))
+    const ask = Promise.resolve(userQuestions.ask({ questions: [item], ...(agent ? { agent } : {}), signal: own.signal }))
     ask.catch(() => {})
     const res = await withTimeout(ask, ms, null, signal)
+    if (!res) own.abort() // timed out: withdraw the card instead of leaving it open with nobody waiting
     if (signal?.aborted) return { outcome: 'cancelled' }
     if (!res || !Array.isArray(res.answers)) return { outcome: 'timeout' }
     const a = res.answers.find(x => x?.id === item.id) || res.answers[0] || {}
@@ -51,14 +53,31 @@ async function askCard(userQuestions, agent, item, ms, signal) {
     return { outcome: 'answered', selected: (a.selected || []).map(String), custom }
   } catch (error) {
     return { outcome: error?.code === 'ASK_CANCELLED' ? 'cancelled' : 'unavailable' }
-  }
+  } finally { own.dispose() }
 }
 
 async function askApproval(approval, agent, toolName, reason, ms, signal) {
   if (approval?.request && agent) {
-    return withTimeout(Promise.resolve(approval.request({ agent, toolName, reason, signal })).catch(() => 'unavailable'), ms, 'timeout', signal)
+    // Own signal per ask: when approvalTimeoutMs gives up, abort the host request too, so dsh records
+    // approval/decided (cancelled) and withdraws the card. Before, the turn moved on with the
+    // approval/asked left open (no decided event, card still shown, answerer still pending).
+    const own = linkedAbort(signal)
+    try {
+      const outcome = await withTimeout(Promise.resolve(approval.request({ agent, toolName, reason, signal: own.signal })).catch(() => 'unavailable'), ms, 'timeout', signal)
+      if (outcome === 'timeout') own.abort()
+      return outcome
+    } finally { own.dispose() }
   }
   return approval?.request ? 'unavailable' : 'no-ui'
+}
+
+/** An AbortController that also aborts when `parent` does; dispose() detaches it. */
+function linkedAbort(parent) {
+  const ac = new AbortController()
+  const onParent = () => ac.abort(parent?.reason)
+  if (parent?.aborted) ac.abort(parent.reason)
+  else parent?.addEventListener?.('abort', onParent, { once: true })
+  return { signal: ac.signal, abort: () => ac.abort(Object.assign(new Error('approval timed out'), { code: 'TIMEOUT' })), dispose: () => parent?.removeEventListener?.('abort', onParent) }
 }
 const ALLOW_RE = /^(allow_once|allow|approve|approved|yes|execute|implement|accept)$/i
 const REJECT_RE = /^(reject|deny|denied|no|cancel|skip)$/i
