@@ -237,15 +237,10 @@ export function installHostSync(deps) {
       }
       // Snapshot what we synced last time BEFORE updating (update mutates the mapping in place).
       const prevKnown = Array.isArray(t.mapping?.skills) ? [...t.mapping.skills] : []
-      const prevBodies = JSON.stringify(t.mapping?.skillBodies || [])
       const patch = { skills: known.length ? known : undefined }
-      if (unknown.length) {
-        patch.skillBodies = unknown
-        if (JSON.stringify(unknown) !== prevBodies) patch.skillBodiesInjected = undefined
-      } else {
-        patch.skillBodies = undefined
-        patch.skillBodiesInjected = undefined
-      }
+      // Re-injection is decided by skillInjectHash alone (it covers mode, loader and bodies).
+      patch.skillBodies = unknown.length ? unknown : undefined
+      patch.skillBodiesInjected = undefined // legacy flag from older mappings
       try { sessions.update(t.id, patch) } catch (e) { soft(logger, 'skills.map', e) }
       for (const name of known) {
         if (prevKnown.includes(name)) continue
@@ -674,8 +669,7 @@ export function applySkillBodyInjection(query, mapping, opts = {}) {
     const mode = opts.mode === 'index' && opts.loaderTool ? 'index' : (opts.mode === 'off' ? 'off' : 'body')
     if (mode === 'off') return query
     const sig = createHash('sha256').update(`${mode}\n${opts.loaderTool || ''}\n${JSON.stringify(bodies)}`).digest('hex').slice(0, 16)
-    if (mapping.skillBodiesInjected && (!mapping.skillInjectHash || mapping.skillInjectHash === sig)) return query
-    if (mapping.skillInjectHash === sig) { mapping.skillBodiesInjected = true; return query }
+    if (mapping.skillInjectHash === sig) return query
     let block
     if (mode === 'index') {
       const lines = bodies.map(b => `- ${b.name}: ${redactSecrets(b.description || skillDescription(undefined, b.content) || '(no description)')}`)
@@ -683,7 +677,6 @@ export function applySkillBodyInjection(query, mapping, opts = {}) {
     } else {
       block = `${SKILL_BODY_OPEN}\n${bodies.map(b => `### Host skill: ${b.name}\n${redactSecrets(b.content)}`).join('\n\n')}\n[/Host skill instructions]`
     }
-    mapping.skillBodiesInjected = true
     mapping.skillInjectHash = sig
     if (typeof opts.onInjected === 'function') { try { opts.onInjected(sig, mode) } catch { /* ignore */ } }
     return `${block}\n\n${query}`

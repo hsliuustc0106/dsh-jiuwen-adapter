@@ -95,3 +95,14 @@ test('config defaults and sessionOverrides matching', () => {
   assert.equal(matchSessionOverride([], 'x'), undefined)
 })
 
+
+test('skill injection state is the hash alone (no skillBodiesInjected flag)', async () => {
+  const { applySkillBodyInjection } = await import('../src/host-sync.js')
+  const m = { skillBodies: [{ name: 'a', content: 'A body' }] }
+  const q1 = applySkillBodyInjection('q', m, { mode: 'body' })
+  assert.notEqual(q1, 'q'); assert.ok(m.skillInjectHash); assert.equal(m.skillBodiesInjected, undefined)
+  assert.equal(applySkillBodyInjection('q', m, { mode: 'body' }), 'q', 'same hash → skip')
+  m.skillBodiesInjected = true // legacy flag alone no longer suppresses a changed set
+  m.skillBodies = [{ name: 'a', content: 'A body v2' }]
+  assert.notEqual(applySkillBodyInjection('q', m, { mode: 'body' }), 'q')
+})
