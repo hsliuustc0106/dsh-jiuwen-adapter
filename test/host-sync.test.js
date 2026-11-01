@@ -17,7 +17,7 @@ test('hostSync defaults ON; master off disables children', () => {
   assert.equal(on.sessionSync, true)
   assert.equal(on.planBridge, true)
   assert.equal(on.toolPassthrough, 'mcp')
-  assert.ok(on.toolAllowlist.includes('bash') && on.toolAllowlist.includes('skill') && !on.toolAllowlist.includes('*'), 'core set by default, * opt-in')
+  assert.deepEqual(on.toolAllowlist, ['*'])
   const off = resolveConfig({ hostSync: false }, { env: {} })
   assert.equal(off.hostSync, false)
   assert.equal(off.syncSkills, false)

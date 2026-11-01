@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows
 ## Unreleased — generic per-session context dedupe
 
 - **Host skills as an index** (`hostSkillInject: index`, default): name + description once per Jiuwen session, bodies on demand via the passthrough `skill` tool; hash persisted across restarts; generic secret redaction for any forwarded skill text. `body` keeps the old behaviour.
+- **Passthrough allowlist**: default stays `toolAllowlist: ['*']` (all host tools); new opt-in `toolAllowlist: 'core'` restricted set, with `toolAllowlistExtra` and host-declared `passthrough: true` tools.
 - **Incremental system prompt updates** (`injectSystemUpdate: diff`, opt-in; default `full`): section-level delta on change, full block otherwise; section hashes persisted on the mapping (no prompt text stored).
 - **`sessionOverrides`**: per-session-id glob knobs (model / chat mode / template), empty by default.
 

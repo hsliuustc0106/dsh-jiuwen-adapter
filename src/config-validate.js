@@ -19,7 +19,7 @@ export const DEPRECATED_VALUES = Object.freeze({
 const TYPES = { boolean: ['hostSync', 'syncSkills', 'syncMcp', 'syncModel', 'syncPlanMode', 'syncWorkDir', 'syncTitle', 'syncDelete', 'syncGoal', 'syncPause', 'syncPermissions', 'syncFork', 'syncGroup', 'syncSchedule', 'syncMemory', 'syncPlugins', 'syncSkillInstall', 'recoverOnDrop', 'redactSkillOutput', 'allowDshAgentLoop', 'documentPersist', 'emitUsage', 'exposeJiuwenTools', 'forwardModelName', 'forwardReasoning', 'interruptOnAbort', 'mcpGcOnStart', 'modelDiscovery', 'noUiAnswer', 'planBridge', 'registerCommands', 'sessionSync', 'showProcessingStatus', 'supportsUserInteraction', 'surfaceGatewayToolEvents', 'swarmflowStopOnAbort', 'toolHostDeclared', 'toolPassthrough', 'typedEvents'],
   number: ['recoverWindowMs', 'approvalTimeoutMs', 'finalGraceMs', 'interruptSettleMs', 'skillBodyMaxChars', 'skillSyncMax', 'mcpGcGraceMs', 'mcpRpcTimeoutMs', 'mcpSessionIdleMs', 'postCancelSettleMs', 'questionTimeoutMs', 'requestTimeoutMs', 'terminalFinalGraceMs', 'toolCallTimeoutMs'],
   string: ['onBusyMessage', 'gatewayURL', 'baseURL', 'provider', 'commandName', 'serviceName', 'mapJiuwenFsToDsh', 'mappingPath', 'apiKeyEnv', 'defaultModel'],
-  array: ['busyIgnoreSources', 'models', 'ignoreMessagePatterns', 'toolAllowlist', 'toolAllowlistExtra'] }
+  array: ['busyIgnoreSources', 'models', 'ignoreMessagePatterns', 'toolAllowlistExtra'] }
 
 let known
 /** All accepted keys: what resolveConfig reads plus what it returns. */

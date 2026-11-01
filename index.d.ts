@@ -160,8 +160,9 @@ export interface JiuwenAdapterConfig {
   swarmflowStopOnAbort?: boolean
   terminalFinalGraceMs?: number
   titleMode?: string
-  toolAllowlist?: string[]
-  /** Added to the default toolAllowlist (ignored when toolAllowlist is set). */
+  /** Default ['*'] (all host tools). 'core' = restricted core set (string or list entry). */
+  toolAllowlist?: string[] | string
+  /** Added to a restricted toolAllowlist (ignored with '*'). */
   toolAllowlistExtra?: string[]
   /** Also pass through host tools whose schema sets `passthrough: true` / `meta.jiuwenPassthrough` (default true). */
   toolHostDeclared?: boolean

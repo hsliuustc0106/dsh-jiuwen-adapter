@@ -52,9 +52,9 @@ Precedence: **environment variable > Cordis plugin config > default** (`provider
 | `questionTimeoutMs` | `JIUWEN_QUESTION_TIMEOUT_MS` | `600000` | Max wait for a dsh answer, then `noUiAnswer` |
 | `approvalTimeoutMs` | `JIUWEN_APPROVAL_TIMEOUT_MS` | `300000` | Max wait for a dsh approval decision on Jiuwen permission / plan approval, then **deny** |
 | `toolPassthrough` | `JIUWEN_TOOL_PASSTHROUGH` | `mcp` when `hostSync` on, else `off` | `mcp`: expose allowlisted dsh tools to Jiuwen as a local MCP server |
-| `toolAllowlist` | `JIUWEN_TOOL_ALLOWLIST` (comma) | core set when `hostSync` on, else `[]` | Tool names / `prefix*` / `*`. Default core set: `bash, read, edit, write, glob, grep`, the `skillLoaderTool`, and the read-only `session_*` query tools, plus `toolAllowlistExtra`. `["*"]` (every host tool) is opt-in |
-| `toolAllowlistExtra` | `JIUWEN_TOOL_ALLOWLIST_EXTRA` (comma) | `[]` | Extra names/globs added to the default set (e.g. `orchestrator_*`, `web_*`) |
-| `toolHostDeclared` | `JIUWEN_TOOL_HOST_DECLARED` | `true` | Also pass through host tools whose schema declares `passthrough: true` (or `meta.jiuwenPassthrough: true`) |
+| `toolAllowlist` | `JIUWEN_TOOL_ALLOWLIST` (comma) | `["*"]` when `hostSync` on, else `[]` | Tool names / `prefix*` / `*`. Default passes every host/plugin tool through (Jiuwen still discovers them progressively). `core` (as the value or a list entry) = restricted set: `bash, read, edit, write, glob, grep`, the `skillLoaderTool`, and the read-only `session_*` query tools |
+| `toolAllowlistExtra` | `JIUWEN_TOOL_ALLOWLIST_EXTRA` (comma) | `[]` | With a restricted `toolAllowlist`: extra names/globs to add (e.g. `orchestrator_*`, `web_*`) |
+| `toolHostDeclared` | `JIUWEN_TOOL_HOST_DECLARED` | `true` | With a restricted `toolAllowlist`: also pass host tools whose schema declares `passthrough: true` (or `meta.jiuwenPassthrough: true`) |
 | `toolApproval` | `JIUWEN_TOOL_APPROVAL` | `dsh` | Gate each passthrough call with `ctx.approval` (deny when unavailable); `none` |
 | `toolApprovalExempt` | `JIUWEN_TOOL_APPROVAL_EXEMPT` | session-query tools | Passthrough tools that skip the gate (dsh never asks for them): `session_search`, `session_event_search`, `session_event_read`, `session_trace`, `session_event_trace`. `*` suffix = prefix |
 | `toolCallTimeoutMs` | `JIUWEN_TOOL_CALL_TIMEOUT_MS` | `120000` | Abort a passthrough dsh tool call |
