@@ -133,6 +133,8 @@ export function apply(ctx) {
       const api = g('jiuwenAdapter')
       const sl = () => { try { return require_fs().readFileSync((process.env.STANDIN_LOG || '/tmp/standin.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return {} } }) } catch { return [] } }
       out.busy = {}
+      const base = sl().length // the stand-in log is shared across runs: only look at this run's requests
+      const mine = () => sl().slice(base)
       const routes = [['p', { provider: 'standin', model: 'standin-m1' }], ...(api ? [['j', { provider: 'jiuwen', model: 'jiuwen-default' }]] : [])]
       const send = (id, text) => sc.prompt({ requestId: `r-${randomUUID()}`, sessionId: id, mode: 'queue', content: [{ type: 'text', text }] }, new AbortController().signal).catch(e => err(`busy send ${text.slice(0, 20)}`, e))
       for (const [k, model] of routes) {
@@ -150,13 +152,13 @@ export function apply(ctx) {
           await tick(1500); await waitIdle(id, 90_000)
           r.ms = Date.now() - t0
           r.replies = evs(id).filter(e => e.type === 'assistant/message').slice(n0).map(e => textOf(e.data.message).slice(0, 160))
-          r.reqs = sl().filter(x => /^(p|j)b[123]$/.test(x.tag) && x.tag.startsWith(k) && !/Generate the session title/.test(x.last || '')).map(x => ({ tag: x.tag, users: x.users, note: !!x.busyNote, tags: x.tags, last: (x.last || '').slice(0, 120) }))
+          r.reqs = mine().filter(x => /^(p|j)b[123]$/.test(x.tag) && x.tag.startsWith(k) && !/Generate the session title/.test(x.last || '')).map(x => ({ tag: x.tag, users: x.users, note: !!x.busyNote, tags: x.tags, last: (x.last || '').slice(0, 120) }))
           r.types = [...new Set(evs(id).map(e => e.type))].sort()
           if (k === 'j') {
             r.jwId = api.sessions.get(id)?.jiuwenSessionId
             // the next turn is a normal turn again (no stale note)
             await prompt(id, `TAG:${k}b4 next`)
-            r.after = { reply: lastReply(id).slice(0, 120), note: !!sl().filter(x => x.tag === 'jb4').at(-1)?.busyNote }
+            r.after = { reply: lastReply(id).slice(0, 120), note: !!mine().filter(x => x.tag === 'jb4').at(-1)?.busyNote }
           }
         } catch (e) { err(`busy ${k}`, e.stack || e) }
       }
@@ -242,7 +244,8 @@ export function apply(ctx) {
           await prompt(mid, 'TAG:jwm1 hi'); await prompt(mid, 'TAG:jwm2 again')
           const sl2 = require_fs().readFileSync((process.env.STANDIN_LOG || '/tmp/standin.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return {} } })
           const m1 = sl2.filter(x => x.tag === 'jwm1').at(-1), m2 = sl2.filter(x => x.tag === 'jwm2').at(-1)
-          ok('dsh-persona preset (minimal, complete prompt) → forwarded once; web default persona not forwarded', m1?.persona && !m2?.persona && !t1?.persona, JSON.stringify({ m1: m1?.persona, m2: m2?.persona, def: t1?.persona }))
+          // injectSystem=full (default since PR #3): the whole host system prompt, the web default persona included, is forwarded once per session and not resent unchanged.
+          ok('dsh-persona preset (minimal) and the web default prompt → forwarded once, not resent unchanged', m1?.persona && !m2?.persona && t1?.persona && !t2?.persona, JSON.stringify({ m1: m1?.persona, m2: m2?.persona, def1: t1?.persona, def2: t2?.persona }))
           out.minimalId = api.sessions.get(mid)?.jiuwenSessionId
         } catch (e) { err('minimal preset', e) }
         out.jwIds = [m?.jiuwenSessionId, fm?.jiuwenSessionId]

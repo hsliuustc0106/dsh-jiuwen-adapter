@@ -29,10 +29,19 @@ Tested in real profiles in both load orders with the stand-in model: `PLAIN_DSH_
 |---|---|---|---|
 | dsh-compaction / compaction-basic / command-compact | `compactNow` works | the summary is local (`compactionMode: local`); the same Jiuwen session continues and no extra Jiuwen turn is created | works |
 | dsh-session-turn-outline | outline matches the turns | the outline counts the Jiuwen turns | works |
-| dsh-mcp-client (stdio) | tool runs | the tool reaches Jiuwen as `mcp_dsh-tools_mcp__<server>__<tool>`; calls are approval-gated, and with no UI they are denied after `approvalTimeoutMs` | works (gated) |
+| dsh-mcp-client (stdio) | tool runs | the tool reaches Jiuwen as `mcp_dsh-tools-<sha16>_mcp__<server>__<tool>` (per-session server); calls are approval-gated, and with no UI they are denied after `approvalTimeoutMs` | works (gated) |
 | dsh-time-context | injected | not forwarded (Jiuwen stamps its own time) | works |
 | ralph / terminal / worktree bundles | tools registered | the tools are published to Jiuwen over dsh-tools (approval-gated) | works (gated) |
 | dsh-experimental-auto-review (Auto preset) | Auto preset applies | Auto → Jiuwen `ask` (bash, write, edit). Fixed: before, Jiuwen stayed at the previous level | works after fix |
+
+## Interrupt on busy (PR #4)
+
+`PLAIN_DSH_ONLY=busy npm run test:plain-dsh`, both load orders: a slow turn (`SLOW12000`), then two user messages 3 s and 3.4 s in.
+
+| Session | Result |
+|---|---|
+| Non-jiuwen | dsh queues the messages and answers each in turn; identical with and without the adapter; no note |
+| Jiuwen | the turn is interrupted within ~3 s; both messages reach Jiuwen in one resend with one note; the next turn has no note. Fixed: the second message landed while the resend waited out `postCancelSettleMs`; the resend was sent and cancelled at once and Jiuwen dropped the first message |
 
 ## Memory-module plugins
 
@@ -42,10 +51,10 @@ dsh has no plugin literally named "memory". Its memory and recall layer is three
 |---|---|---|---|
 | dsh-agent-instructions (AGENTS.md / CLAUDE.md, in dsh-base) | unchanged | the AGENTS.md reminder is forwarded with the first prompt, and Jiuwen keeps it in history (not resent) | works |
 | dsh-session-reference (`dsh-session:<id>` mentions, in dsh-web-app) | unchanged | the referenced-session snapshot is forwarded with the citing prompt; later turns are not resent | works |
-| dsh-experimental-session-search (+ session-query-sqlite, tool-session-query; opt-in) | unchanged | the `session_*` tools reach Jiuwen as `mcp_dsh-tools_session_*` and return dsh's session index | works (after the fix below) |
+| dsh-experimental-session-search (+ session-query-sqlite, tool-session-query; opt-in) | unchanged | the `session_*` tools reach Jiuwen as `mcp_dsh-tools-<sha16>_session_*` and return dsh's session index | works (after the fix below) |
 
 - **Jiuwen's own memory:** no conflict. Jiuwen keeps its `coding_memory_*` tools and its history. dsh tools are prefixed, and dsh context is sent once per turn, never duplicated.
 - **Fix:** the passthrough asked for dsh approval on every call. dsh never asks for the read-only session-query tools, so a Jiuwen session would hang until approval timed out (300 s). These tools are now in `toolApprovalExempt` (see the configuration docs). All other tools are still gated.
 - **Limit:** Jiuwen-side memory is not mirrored into dsh's session index. `session_search` sees the dsh transcripts of Jiuwen sessions, not Jiuwen's internal memory.
 
-**Gaps:** opt-in and experimental plugins outside `dsh-base`/`dsh-web-app` were not loaded: mcp-client, time-context, session-search, ralph, terminal, worktree, auto-review. dsh has no session delete, so the Jiuwen session is deleted only after dsh has dropped it.
+**Gaps:** dsh has no session delete, so the Jiuwen session is deleted only after dsh has dropped it. ralph / terminal / worktree tools were checked as published and gated, not run end to end inside a Jiuwen turn (no approval UI in the driver). Interrupt-on-busy while an approval card is pending is covered by unit tests only.

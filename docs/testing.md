@@ -28,6 +28,7 @@ test/live/lib.mjs         guards, stand-in launcher, Jiuwen snapshot + exact res
 | mcp-bridge | MCP verify, tools/call approval + execute, proxy lifecycle |
 | edge-cases, host-sync*, persona-generic | edge cases, resume, rename/fork, ask_user (Other strip), persona generic/minimal/`{{model}}` |
 | fuzz-gateway | adversarial frames |
+| busy-interrupt | onBusyMessage: interrupt, coalesce, deferred on approval, host stop wins, carry of a resend that was never sent |
 
 ## Opt-in live suites
 
@@ -49,7 +50,9 @@ npm run test:live
 | live-deep (A–M, L, MCP tool_search invocation, ask_user card) | `JW_USE_STANDIN_CMD`/`JW_RESTORE_CMD` |
 | compat-runtime `--sync --sync2 --reload` | + `DSH_NM` |
 | live-drop-recovery | + `GW_KILL`/`GW_START` |
-| plain-dsh profile matrix + memory-module plugins + extra plugins (`PLAIN_DSH_ONLY=plain\|mem\|ext`) | + `DSH_BIN` (also standalone: `npm run test:plain-dsh`) |
+| plain-dsh profile matrix + extra plugins + interrupt-on-busy + memory-module plugins (`PLAIN_DSH_ONLY=plain\|ext\|busy\|mem`; `PLAIN_DSH_*_QUICK=1` runs only the adapter-last profile) | + `DSH_BIN` (also standalone: `npm run test:plain-dsh`) |
+
+Each step starts from the snapshot: a step that leaves global Jiuwen state changed (permissions, heartbeat, MCP) prints `NOTE … left Jiuwen state changed` and is reset. `LIVE_LOG_DIR=<dir>` keeps each step's full output.
 
 The stand-in (`test/fixtures/stand-in.mjs`) is started on `STANDIN_PORT` (18999) unless a server is already listening there. It logs to `STANDIN_LOG`.
 
