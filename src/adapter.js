@@ -249,7 +249,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           // injectSystem (jiuwen sessions only; fail soft). Skipped for aux calls and ask_user answers.
           let systemHash, systemSections, skillInjectHash, fsRouteHash
       if (!aux && cfg.injectSystem !== 'off' && !turnMapping.pendingQuestion) {
-            const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId), cfg.injectSystemMaxBytes, cfg.injectSystemUpdate, cfg.hostProfile)
+            const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId), cfg.injectSystemMaxBytes, cfg.injectSystemUpdate, cfg.hostProfile, { allow: cfg.hostSystemSectionsAllow, deny: cfg.hostSystemSectionsDeny })
             query = inj.query; systemHash = inj.hash; systemSections = inj.sections
             if (inj.hash) makeTrace(cfg.traceFile)({ at: 'system-inject', dshSessionId, mode: cfg.injectSystem, bytes: inj.bytes, updated: inj.updated, hash: inj.hash, ...(inj.delta ? { delta: true, fullBytes: inj.fullBytes } : {}) })
           }
@@ -272,7 +272,11 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           if (!aux && cfg.syncSkillInstall !== false && turnMapping.skillBodies?.length) {
             const loader = cfg.skillLoaderTool && exposedNow.includes(cfg.skillLoaderTool) ? `mcp_${mcpName}_${cfg.skillLoaderTool}` : undefined
             query = applySkillBodyInjection(query, turnMapping, { mode: cfg.hostSkillInject, loaderTool: loader,
-              onInjected: (h, mode) => { skillInjectHash = h; trace({ at: 'skill-inject', dshSessionId, mode, skills: turnMapping.skillBodies.length, hash: h }) } })
+              onMissingLoader: () => {
+                deps.logger?.warn?.(`[dsh-jiuwen] hostSkillInject:index — skill loader tool "${cfg.skillLoaderTool || 'skill'}" not passed through; injecting index-only (no silent body fallback). Set hostSkillInject: body for inline bodies.`)
+                trace({ at: 'skill-inject', warn: 'index-without-loader', dshSessionId, skillLoaderTool: cfg.skillLoaderTool || 'skill' })
+              },
+              onInjected: (h, mode) => { skillInjectHash = h; trace({ at: 'skill-inject', dshSessionId, mode, skills: turnMapping.skillBodies.length, hash: h, loader: Boolean(loader) }) } })
           }
           trace({ at: 'turn-start', dshSessionId, jiuwen: turnMapping.jiuwenSessionId, purpose: options.purpose, query: query.slice(0, 500), messages: (options.messages || []).length,
             blocks: JSON.stringify((options.messages || []).flatMap(m => Array.isArray(m.content) ? m.content.filter(b => b?.type !== 'text') : [])).slice(0, 1500) })

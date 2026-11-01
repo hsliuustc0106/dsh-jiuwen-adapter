@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { applySkillBodyInjection, redactSecrets, skillDescription, SKILL_INDEX_OPEN, SKILL_BODY_OPEN } from '../src/host-sync.js'
-import { applySystemInjection, splitSections, systemDelta, sectionHashes, SYSTEM_PARTIAL, SYSTEM_UPDATED, SYSTEM_OPEN } from '../src/system-inject.js'
+import { applySystemInjection, splitSections, systemDelta, sectionHashes, filterHostSystemSections, SYSTEM_PARTIAL, SYSTEM_UPDATED, SYSTEM_OPEN } from '../src/system-inject.js'
 import { matchSessionOverride } from '../src/adapter.js'
 import { resolveConfig } from '../src/config.js'
 
@@ -18,13 +18,19 @@ test('skill index: names + descriptions once, no bodies, no secrets', () => {
   assert.equal(applySkillBodyInjection('hi', m, { mode: 'index', loaderTool: 'mcp_x_skill' }), 'hi')
 })
 
-test('skill index falls back to redacted bodies without a loader tool; off sends nothing', () => {
+test('skill index stays index-only without a loader tool (no silent body dump); off sends nothing', () => {
   const m = { skillBodies: sk }
-  const q = applySkillBodyInjection('hi', m, { mode: 'index' })
-  assert.ok(q.startsWith(SKILL_BODY_OPEN))
-  assert.match(q, /API_KEY=\[REDACTED\]/)
-  assert.doesNotMatch(q, /supersecretvalue123/)
+  let warned = 0
+  const q = applySkillBodyInjection('hi', m, { mode: 'index', onMissingLoader: () => { warned++ } })
+  assert.ok(q.startsWith(SKILL_INDEX_OPEN))
+  assert.match(q, /- alpha: Do alpha things/)
+  assert.match(q, /Bodies are not available on demand/)
+  assert.doesNotMatch(q, /supersecret|SKILL_BODY|API_KEY=/)
+  assert.equal(warned, 1)
   assert.equal(applySkillBodyInjection('hi', { skillBodies: sk }, { mode: 'off' }), 'hi')
+  const body = applySkillBodyInjection('hi', { skillBodies: sk }, { mode: 'body' })
+  assert.ok(body.startsWith(SKILL_BODY_OPEN))
+  assert.match(body, /API_KEY=\[REDACTED\]/)
 })
 
 test('skill injection persists across restarts by hash and re-sends on change', () => {
@@ -83,12 +89,16 @@ test('systemDelta refuses unsafe deltas (preamble change, reorder, no baseline, 
 
 test('config defaults and sessionOverrides matching', () => {
   const c = resolveConfig({}, { env: {} })
-  assert.equal(c.injectSystemUpdate, 'full', 'diff is opt-in')
+  assert.equal(c.injectSystemUpdate, 'diff', 'diff is the default')
   assert.equal(c.hostSkillInject, 'index')
   assert.equal(c.skillLoaderTool, 'skill')
+  assert.deepEqual(c.hostSystemSectionsAllow, [])
+  assert.deepEqual(c.hostSystemSectionsDeny, [])
   assert.equal(c.coreTools, undefined, 'prompt-based core-tool hint removed')
   assert.deepEqual(c.sessionOverrides, [])
   assert.equal(resolveConfig({}, { env: { JIUWEN_HOST_SKILL_INJECT: 'body' } }).hostSkillInject, 'body')
+  assert.equal(resolveConfig({ injectSystemUpdate: 'full' }, { env: {} }).injectSystemUpdate, 'full')
+  assert.deepEqual(resolveConfig({ hostSystemSectionsAllow: ['^# Identity$'] }, { env: {} }).hostSystemSectionsAllow, ['^# Identity$'])
   const list = resolveConfig({ sessionOverrides: [{ match: 'worker-*', modelName: 'fast' }, { match: '*', chatMode: 'agent' }] }, { env: {} }).sessionOverrides
   assert.equal(matchSessionOverride(list, 'worker-1').modelName, 'fast')
   assert.equal(matchSessionOverride(list, 'orchestrator-1').chatMode, 'agent')
@@ -123,4 +133,40 @@ test('truncateSkillBody: marker + configurable limit', async () => {
   assert.equal(t.length, 200)
   assert.match(t, /truncated by dsh-jiuwen adapter: capped at 200 of 500 chars\]$/)
   assert.equal(resolveConfig({ skillBodyMaxChars: 9000, skillSyncMax: 5 }, { env: {} }).skillBodyMaxChars, 9000)
+})
+
+
+test('filterHostSystemSections: allow-only, deny-only, both; fenced headings ignored', () => {
+  const t = '# Keep\nA\n```\n# fenced\n```\n# Drop\nB\n# Other\nC'
+  assert.equal(filterHostSystemSections(t, {}), t)
+  const allow = filterHostSystemSections(t, { allow: ['^# Keep$', '^# Other$'] })
+  assert.match(allow, /# Keep\nA/)
+  assert.match(allow, /# Other\nC/)
+  assert.doesNotMatch(allow, /# Drop/)
+  // fenced `# fenced` is content inside Keep, not its own section — allow/deny of that heading is a no-op
+  assert.equal(filterHostSystemSections(t, { allow: ['^# fenced$'] }), '')
+  assert.match(filterHostSystemSections(t, { deny: ['^# fenced$'] }), /# Drop/)
+  const deny = filterHostSystemSections(t, { deny: ['^# Drop$'] })
+  assert.match(deny, /# Keep/)
+  assert.match(deny, /# Other/)
+  assert.doesNotMatch(deny, /# Drop\nB/)
+  const both = filterHostSystemSections(t, { allow: ['^# Keep$', '^# Drop$', '^# Other$'], deny: ['^# Drop$'] })
+  assert.match(both, /# Keep/)
+  assert.match(both, /# Other/)
+  assert.doesNotMatch(both, /# Drop/)
+  const withPreamble = 'intro\n# Keep\nok'
+  assert.match(filterHostSystemSections(withPreamble, { allow: ['^$'] }), /^intro/)
+  assert.doesNotMatch(filterHostSystemSections(withPreamble, { allow: ['^# Keep$'] }), /^intro/)
+  const inj = applySystemInjection('q', { system: t }, { jiuwenSessionId: 'j' }, 'full', undefined, undefined, 'full', undefined, { deny: ['^# Drop$'] })
+  assert.match(inj.query, /# Keep/)
+  assert.doesNotMatch(inj.query, /# Drop\nB/)
+})
+
+test('restricted toolAllowlist still includes skillLoaderTool under hostSkillInject:index', () => {
+  const c = resolveConfig({ toolAllowlist: ['bash', 'read'], hostSkillInject: 'index' }, { env: {} })
+  assert.ok(c.toolAllowlist.includes('skill'))
+  const custom = resolveConfig({ toolAllowlist: ['bash'], hostSkillInject: 'index', skillLoaderTool: 'load_skill' }, { env: {} })
+  assert.ok(custom.toolAllowlist.includes('load_skill'))
+  const body = resolveConfig({ toolAllowlist: ['bash'], hostSkillInject: 'body' }, { env: {} })
+  assert.ok(!body.toolAllowlist.includes('skill'), 'body mode does not force-add loader')
 })

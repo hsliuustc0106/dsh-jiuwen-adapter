@@ -7,19 +7,21 @@ const bridgeWith = (exposed) => ({ prepare: async () => ({ mcpServerName: 'dsh-t
 const tools = [{ name: 'bash' }, { name: 'skill' }]
 const SK = [{ name: 'deploy', content: 'Step 1 secret apiKey: abc12345', description: 'Deploy things' }]
 
-test('integration: index-mode skills → index when the loader is passed through, body fallback otherwise', async () => {
+test('integration: index-mode skills → index when the loader is passed through; index-only (no body dump) otherwise', async () => {
   const withLoader = makeRig({ toolPassthrough: 'mcp', hostSkillInject: 'index' }, { mcpBridge: bridgeWith(['bash', 'skill']) })
   withLoader.sessions.update('a', { skillBodies: SK })
   await withLoader.turn('a', { tools })
   const q = withLoader.sent[0].query
   assert.ok(q.includes(SKILL_INDEX_OPEN) && q.includes('mcp_dsh-tools_skill') && q.includes('Deploy things'))
   assert.ok(!q.includes('Step 1'), 'no body in index mode')
-  const noLoader = makeRig({ toolPassthrough: 'mcp', hostSkillInject: 'index' }, { mcpBridge: bridgeWith(['bash']) })
+  const warns = []
+  const noLoader = makeRig({ toolPassthrough: 'mcp', hostSkillInject: 'index' }, { mcpBridge: bridgeWith(['bash']), logger: { warn: (m) => warns.push(m), info() {}, error() {}, debug() {} } })
   noLoader.sessions.update('b', { skillBodies: SK })
   await noLoader.turn('b', { tools })
   const q2 = noLoader.sent[0].query
-  assert.ok(q2.includes(SKILL_BODY_OPEN) && q2.includes('Step 1'), 'falls back to inline bodies')
-  assert.ok(!q2.includes('abc12345'), 'bodies redacted')
+  assert.ok(q2.includes(SKILL_INDEX_OPEN) && q2.includes('Deploy things'), 'stays index-only')
+  assert.ok(!q2.includes(SKILL_BODY_OPEN) && !q2.includes('Step 1'), 'no silent body fallback')
+  assert.ok(warns.some((w) => /index-only|skill loader/i.test(String(w))), 'warns clearly')
 })
 
 test('integration: skill injection hash persists across restart; re-sent only when the set changes', async () => {

@@ -674,23 +674,32 @@ export const SKILL_INDEX_OPEN = '[Host skills available — not installed in Jiu
 /**
  * Soft-inject host skills Jiuwen does not know (install gap path), once per Jiuwen session and again
  * only when the set changes (hash-gated, persisted as mapping.skillInjectHash).
- *  - mode 'body' (legacy): full bodies inline.
- *  - mode 'index' (default when a loader tool is reachable): name + one-line description only; the model
- *    loads a body on demand through the host's skill tool (opts.loaderTool, e.g. mcp_<server>_skill).
+ *  - mode 'body' (explicit): full bodies inline.
+ *  - mode 'index' (default): name + one-line description only; the model loads a body on demand through
+ *    the host's skill tool (opts.loaderTool, e.g. mcp_<server>_skill). Never silently falls back to
+ *    full bodies when the loader is missing — stays index-only and calls opts.onMissingLoader when set.
+ *  - mode 'off': nothing.
  * Bodies and descriptions are passed through redactSecrets(). Does not mutate `mapping`. Returns the query (unchanged on any error).
  */
 export function applySkillBodyInjection(query, mapping, opts = {}) {
   try {
     const bodies = mapping?.skillBodies
     if (!Array.isArray(bodies) || !bodies.length) return query
-    const mode = opts.mode === 'index' && opts.loaderTool ? 'index' : (opts.mode === 'off' ? 'off' : 'body')
+    // Honour the requested mode exactly: index never silently dumps bodies.
+    const mode = opts.mode === 'index' ? 'index' : (opts.mode === 'off' ? 'off' : 'body')
     if (mode === 'off') return query
+    if (mode === 'index' && !opts.loaderTool && typeof opts.onMissingLoader === 'function') {
+      try { opts.onMissingLoader() } catch { /* ignore */ }
+    }
     const sig = createHash('sha256').update(`${mode}\n${opts.loaderTool || ''}\n${JSON.stringify(bodies)}`).digest('hex').slice(0, 16)
     if (mapping.skillInjectHash === sig) return query
     let block
     if (mode === 'index') {
       const lines = bodies.map(b => `- ${b.name}: ${redactSecrets(b.description || skillDescription(undefined, b.content) || '(no description)')}`)
-      block = `${SKILL_INDEX_OPEN}\nThese host skills are not installed in Jiuwen. When a task matches one, load its full instructions first by calling ${opts.loaderTool} with the skill name, then follow them. Do not load skills that are not relevant.\n${lines.join('\n')}\n[/Host skills]`
+      const how = opts.loaderTool
+        ? `When a task matches one, load its full instructions first by calling ${opts.loaderTool} with the skill name, then follow them. Do not load skills that are not relevant.`
+        : 'Bodies are not available on demand (skill loader tool was not passed through this turn). Only this index is injected — set hostSkillInject: body for inline bodies, or ensure skillLoaderTool is present on the host tools list and allowlist.'
+      block = `${SKILL_INDEX_OPEN}\nThese host skills are not installed in Jiuwen. ${how}\n${lines.join('\n')}\n[/Host skills]`
     } else {
       block = `${SKILL_BODY_OPEN}\n${bodies.map(b => `### Host skill: ${b.name}\n${redactSecrets(b.content)}`).join('\n\n')}\n[/Host skill instructions]`
     }

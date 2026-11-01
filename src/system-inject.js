@@ -4,6 +4,8 @@
  * cwd, project_dir, workspace_dir, trusted_dirs, mcp, ...). Generic: whatever system/developer text the
  * host supplies for the session (any profile, any role) is forwarded verbatim in `full` mode (default);
  * nothing role-specific is detected. Resent only when its hash changes (marked as a replacement).
+ * Mid-session updates default to section-level `diff` (safety gates may still send full).
+ * Optional hostSystemSectionsAllow / Deny filter sections by heading before hash/diff.
  * Every helper fails soft: on any error the caller sends the plain query (old behaviour).
  */
 import { createHash } from 'node:crypto'
@@ -45,6 +47,29 @@ export function splitSections(text) {
 }
 
 /** { key: hash } per section (stored on the mapping; never the text itself). */
+/**
+ * Filter host system text by markdown heading before inject/hash/diff.
+ * `allow` / `deny` are regexes (or strings compiled as RegExp) tested against each section's
+ * heading line (`# Title`, `## …`, `### …`). The preamble (text before the first heading) has
+ * an empty heading `""`.
+ *  - empty allow + empty deny → unchanged (all sections)
+ *  - non-empty allow → keep only sections whose heading matches at least one allow pattern
+ *  - non-empty deny → drop sections whose heading matches any deny pattern (applied after allow)
+ * No built-in denylist. Fenced-code-safe via splitSections.
+ */
+export function filterHostSystemSections(text, { allow = [], deny = [] } = {}) {
+  const toRe = (p) => (p instanceof RegExp ? p : new RegExp(String(p)))
+  const allowRe = (Array.isArray(allow) ? allow : []).map(toRe)
+  const denyRe = (Array.isArray(deny) ? deny : []).map(toRe)
+  if (!allowRe.length && !denyRe.length) return text
+  const kept = splitSections(text).filter((s) => {
+    if (allowRe.length && !allowRe.some((r) => r.test(s.head))) return false
+    if (denyRe.length && denyRe.some((r) => r.test(s.head))) return false
+    return true
+  })
+  return kept.map((s) => s.text).join('\n')
+}
+
 export function sectionHashes(text) {
   const m = {}
   for (const s of splitSections(text)) m[s.key] = createHash('sha256').update(s.text).digest('hex').slice(0, 12)
@@ -126,7 +151,7 @@ export function systemHash(text) {
  * @returns {{ query: string, hash?: string }} query with the block prefixed when it is new for
  * this mapping (hash differs from mapping.systemHash); otherwise the query unchanged.
  */
-export function applySystemInjection(query, options, mapping, mode, fallbackPersona, maxBytes = SYSTEM_MAX_BYTES, updateMode = 'full', hostProfile = undefined) {
+export function applySystemInjection(query, options, mapping, mode, fallbackPersona, maxBytes = SYSTEM_MAX_BYTES, updateMode = 'diff', hostProfile = undefined, sectionFilter = undefined) {
   try {
     if (mode !== 'persona' && mode !== 'full') return { query }
     const sys = latestSystemText(options)
@@ -135,6 +160,10 @@ export function applySystemInjection(query, options, mapping, mode, fallbackPers
     let body = mode === 'full' ? sys : extractProfilePersona(sys, hostProfile)
     if (!body && mode === 'persona') body = genericPersona(sys, fallbackPersona)
     if (!body) return { query }
+    if (sectionFilter && (sectionFilter.allow?.length || sectionFilter.deny?.length)) {
+      body = filterHostSystemSections(body, sectionFilter)
+      if (!body.trim()) return { query }
+    }
     const capped = capBytes(body, maxBytes)
     const hash = systemHash(`${mapping?.jiuwenSessionId || ''}\n${mode}\n${capped}`)
     if (mapping?.systemHash === hash) return { query }

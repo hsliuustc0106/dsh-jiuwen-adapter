@@ -5,10 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased — generic per-session context dedupe
 
-- **Host skills as an index** (`hostSkillInject: index`, default): name + description once per Jiuwen session, bodies on demand via the passthrough `skill` tool; hash persisted across restarts; generic secret redaction for any forwarded skill text. `body` keeps the old behaviour.
-- **Passthrough allowlist**: default stays `toolAllowlist: ['*']` (all host tools); new opt-in `toolAllowlist: 'core'` restricted set, with `toolAllowlistExtra` and host-declared `passthrough: true` tools.
-- **No host-specific profiles**: the built-in host-specific persona markers and group-event names are removed. `injectSystem: persona` uses the generic dsh persona source, or the sections named in an optional user-supplied `hostProfile` object (which also lists group-change event types for `syncGroup`; none by default).
-- **Incremental system prompt updates** (`injectSystemUpdate: diff`, opt-in; default `full`): section-level delta on change, full block otherwise; section hashes persisted on the mapping (no prompt text stored).
+- **Host skills as an index** (`hostSkillInject: index`, default): name + description once per Jiuwen session, bodies on demand via the passthrough `skill` tool (always allowlisted / force-included under index mode); hash persisted across restarts; generic secret redaction for any forwarded skill text. If the loader is still missing, stays **index-only** and logs — never silently dumps full bodies. `body` is the explicit inline-bodies mode.
+- **Passthrough allowlist**: default stays `toolAllowlist: ['*']` (all host tools); new opt-in `toolAllowlist: 'core'` restricted set, with `toolAllowlistExtra` and host-declared `passthrough: true` tools. Progressive discovery stays enabled.
+- **No host-specific profiles**: the built-in host-specific persona markers and group-event names are removed. `injectSystem: persona` uses the generic dsh persona source, or the sections named in an optional user-supplied `hostProfile` object (which also lists group-change event types for `syncGroup`; none by default). Hosts that need the full orchestrator/role prompt keep `injectSystem: full`; ordinary dsh chats may use `persona`/`off`.
+- **Incremental system prompt updates** (`injectSystemUpdate: diff`, **default**; `full` still available): section-level delta on change when safe (preamble/reorder/size gates → full); section hashes persisted on the mapping (no prompt text stored).
+- **Host system section filter** (`hostSystemSectionsAllow` / `hostSystemSectionsDeny`): optional regex filters by markdown heading when building `[System instructions from host]`, applied before hash/diff. Empty allow + empty deny = all sections; no built-in denylist.
 - **`sessionOverrides`**: per-session-id glob knobs (model / chat mode / template), empty by default.
 
 ## Unreleased

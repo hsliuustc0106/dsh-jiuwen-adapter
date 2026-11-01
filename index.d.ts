@@ -75,17 +75,21 @@ export interface JiuwenAdapterConfig {
   forwardReasoning?: boolean
   gatewayURL?: string
   historyMode?: string
-  /** Forward host system prompt once per Jiuwen session: off | persona (default) | full. Jiuwen sessions only; fail-soft. */
+  /** Forward host system prompt once per Jiuwen session: full (default; keep for full orchestrator/role prompts) | persona | off (ordinary dsh chats may use persona/off to cut overlap with Jiuwen rails). Jiuwen sessions only; fail-soft. */
   injectSystem?: 'off' | 'persona' | 'full'
   /** Byte cap for the forwarded host system prompt (default 65536); longer text gets a truncation marker. */
   injectSystemMaxBytes?: number
   /** Optional host prompt profile: persona sections for injectSystem 'persona' and group-change event types (none by default). */
   hostProfile?: { name?: string, personaSections?: Array<string | RegExp>, personaStop?: Array<string | RegExp>, personaAlways?: Array<{ match: string | RegExp, line: string }>, groupEvents?: string[] }
-  /** Mid-session host system prompt change: resend everything (full, default) or only changed heading sections (diff, opt-in). */
+  /** Mid-session host system prompt change: only changed heading sections (diff, default; safety gates may still send full) or everything (full). */
   injectSystemUpdate?: 'diff' | 'full'
-  /** Host skills Jiuwen lacks: index (default; name+description, bodies on demand via skillLoaderTool) | body | off. */
+  /** Keep only host system sections whose markdown heading matches one of these regexes (empty = no allow filter). Applied before hash/diff. */
+  hostSystemSectionsAllow?: Array<string | RegExp>
+  /** Drop host system sections whose markdown heading matches one of these regexes (empty = no deny filter). Applied after allow. No built-in denylist. */
+  hostSystemSectionsDeny?: Array<string | RegExp>
+  /** Host skills Jiuwen lacks: index (default; name+description, bodies on demand via skillLoaderTool which is always allowlisted) | body (explicit inline) | off. Index never silently dumps bodies. */
   hostSkillInject?: 'index' | 'body' | 'off'
-  /** Passthrough host tool that loads a skill body by name (default 'skill'). */
+  /** Passthrough host tool that loads a skill body by name (default 'skill'). Always passed through under hostSkillInject:index even with a restrictive toolAllowlist. */
   skillLoaderTool?: string
   /** Best-effort secret masking of the skill loader tool output (default true). */
   redactSkillOutput?: boolean

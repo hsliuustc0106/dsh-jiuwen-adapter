@@ -173,7 +173,11 @@ export function resolveConfig(raw = {}, opts = {}) {
             : (off ? [] : ['*'])
       if (list.includes('*') || !list.length) return list
       const extra = Array.isArray(raw.toolAllowlistExtra) ? raw.toolAllowlistExtra.map(String) : String(env.JIUWEN_TOOL_ALLOWLIST_EXTRA || '').split(',').map(x => x.trim()).filter(Boolean)
-      if (list.includes('core')) list = [...list.filter(x => x !== 'core'), ...DEFAULT_PASSTHROUGH_TOOLS, String(raw.skillLoaderTool || env.JIUWEN_SKILL_LOADER_TOOL || 'skill')]
+      const loader = String(raw.skillLoaderTool || env.JIUWEN_SKILL_LOADER_TOOL || 'skill')
+      if (list.includes('core')) list = [...list.filter(x => x !== 'core'), ...DEFAULT_PASSTHROUGH_TOOLS, loader]
+      // hostSkillInject:index needs the loader tool even under a restrictive allowlist (never silent body dump).
+      const hsi = String(env.JIUWEN_HOST_SKILL_INJECT || raw.hostSkillInject || 'index').toLowerCase()
+      if (hsi === 'index' && loader) list = [...list, loader]
       return [...new Set([...list, ...extra])]
     })(),
     /** Honour host-declared passthrough flags on tool schemas (in addition to toolAllowlist). */
@@ -252,7 +256,7 @@ export function resolveConfig(raw = {}, opts = {}) {
     /** User-message blocks matching these regexes are not forwarded (default: DSH runtime-context and dsh-time-context snapshots; Jiuwen stamps its own time/runtime). */
     ignoreMessagePatterns: (Array.isArray(raw.ignoreMessagePatterns) ? raw.ignoreMessagePatterns : ['^Current runtime context\\.', '^Time sampled while preparing turn \\d+'])
       .map(p => { try { return new RegExp(String(p), 'm') } catch { return null } }).filter(Boolean),
-    /** Forward the host system prompt to Jiuwen once per session (hash-gated): full (default, whole host prompt, any role) | persona | off. */
+    /** Forward the host system prompt to Jiuwen once per session (hash-gated): full (default; keep for hosts that need the full orchestrator/role prompt) | persona | off (ordinary dsh chats may use persona/off to cut overlap with Jiuwen rails). */
     /** Optional user-supplied host prompt profile object (persona sections, group events); see host-profiles.js. None by default. */
     hostProfile: raw.hostProfile && typeof raw.hostProfile === 'object' ? raw.hostProfile : undefined,
     injectSystem: pickEnum(env.JIUWEN_INJECT_SYSTEM || raw.injectSystem, ['off', 'persona', 'full'], 'full'),
@@ -270,9 +274,24 @@ export function resolveConfig(raw = {}, opts = {}) {
     syncTitle: syncBit('syncTitle', 'JIUWEN_SYNC_TITLE'),
     syncDelete: syncBit('syncDelete', 'JIUWEN_SYNC_DELETE'),
     syncGoal: syncBit('syncGoal', 'JIUWEN_SYNC_GOAL'),
-    /** When the host system prompt changes mid-session: diff (default; resend only changed heading sections when clearly smaller) | full (resend everything). */
-    injectSystemUpdate: pickEnum(env.JIUWEN_INJECT_SYSTEM_UPDATE || raw.injectSystemUpdate, ['diff', 'full'], 'full'),
-    /** Host skills Jiuwen lacks: index (default; name+description once, bodies loaded on demand via skillLoaderTool) | body (legacy inline bodies) | off. Falls back to body when the loader tool is not passed through. */
+    /** When the host system prompt changes mid-session: diff (default; resend only changed heading sections when clearly smaller) | full (resend everything). Safety gates (preamble change, reorder, size) still fall back to full. */
+    injectSystemUpdate: pickEnum(env.JIUWEN_INJECT_SYSTEM_UPDATE || raw.injectSystemUpdate, ['diff', 'full'], 'diff'),
+    /**
+     * Optional filters for the forwarded host system prompt, by markdown heading (`#`..`###` line).
+     * Regex strings (or RegExp). Empty allow + empty deny = all sections. Applied before hash/diff.
+     * No built-in denylist. See filterHostSystemSections in system-inject.js.
+     */
+    hostSystemSectionsAllow: (() => {
+      if (Array.isArray(raw.hostSystemSectionsAllow)) return raw.hostSystemSectionsAllow.map(String)
+      const e = env.JIUWEN_HOST_SYSTEM_SECTIONS_ALLOW
+      return e ? String(e).split(',').map(x => x.trim()).filter(Boolean) : []
+    })(),
+    hostSystemSectionsDeny: (() => {
+      if (Array.isArray(raw.hostSystemSectionsDeny)) return raw.hostSystemSectionsDeny.map(String)
+      const e = env.JIUWEN_HOST_SYSTEM_SECTIONS_DENY
+      return e ? String(e).split(',').map(x => x.trim()).filter(Boolean) : []
+    })(),
+    /** Host skills Jiuwen lacks: index (default; name+description once, bodies on demand via skillLoaderTool which is always allowlisted in index mode) | body (explicit inline bodies) | off. Index never silently dumps bodies when the loader is missing — stays index-only. */
     hostSkillInject: pickEnum(env.JIUWEN_HOST_SKILL_INJECT || raw.hostSkillInject, ['index', 'body', 'off'], 'index'),
     /** Passthrough host tool that returns a skill body by name (dsh: `skill`). */
     /** Host skills Jiuwen lacks: forward at most this many per sync, each body capped at skillBodyMaxChars (a truncation marker is appended). */

@@ -387,6 +387,12 @@ export function createMcpBridge({ config, services, rpc, logger }) {
       e.schemas.clear()
       const c0 = cfg()
       for (const t of tools || []) if (t?.name && (matchesAllowlist(t.name, c0.toolAllowlist) || (c0.toolHostDeclared !== false && hostDeclaredPassthrough(t)))) e.schemas.set(t.name, t)
+      // hostSkillInject:index must keep skillLoaderTool reachable even under a restrictive allowlist.
+      if (c0.hostSkillInject === 'index') {
+        const loader = c0.skillLoaderTool || 'skill'
+        const t = (tools || []).find((x) => x?.name === loader)
+        if (t) e.schemas.set(t.name, t)
+      }
       if (!e.schemas.size) return null
 
       const lr = await startListen()

@@ -239,3 +239,15 @@ test('memory plugins: read-only session-query tools skip the per-call approval g
   assert.equal(r.result.isError, true, 'empty exempt list restores the old gate')
   await b2.b.dispose()
 })
+
+test('hostSkillInject:index force-includes skillLoaderTool even when allowlist excludes it', async () => {
+  const tools = [...schemas, { name: 'skill', description: 'load skill body' }]
+  const { b } = bridge({}, { toolAllowlist: ['read'], hostSkillInject: 'index', skillLoaderTool: 'skill' })
+  await b.prepare(tools, 'idx')
+  assert.deepEqual(b.exposed('idx').sort(), ['read', 'skill'])
+  await b.dispose()
+  const body = bridge({}, { toolAllowlist: ['read'], hostSkillInject: 'body', skillLoaderTool: 'skill' })
+  await body.b.prepare(tools, 'body')
+  assert.deepEqual(body.b.exposed('body'), ['read'], 'body mode does not force-include loader')
+  await body.b.dispose()
+})
