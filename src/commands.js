@@ -585,6 +585,11 @@ ${jobs.slice(0, 15).map(j => `- ${j.id || j.job_id || j.name || JSON.stringify(j
             const m = error?.method || (msg.match(/unknown method:?\s*([\w.]+)/i) || [])[1] || 'this method'
             return { kind: 'success', text: `Jiuwen: not available on this Gateway — ${m} is not routed on /ws (feature-detected; hidden from help).` }
           }
+          if (error?.code === 'TIMEOUT' && error.mayStillComplete) {
+            // Model-backed command (compact / btw / recap): Jiuwen keeps running it after we stop waiting.
+            const secs = Math.round((error.timeoutMs || 0) / 1000)
+            return { kind: 'success', text: `Jiuwen: ${error.method || 'the command'} is still running on the Gateway after ${secs} s (it is a model call and continues in the background). It normally completes on its own; check later with /${cmdName()} status or /${cmdName()} history.` }
+          }
           const hint = /unknown method/i.test(msg) ? ' (this Gateway build does not route it on /ws)'
             : (/timed? ?out|ETIMEDOUT/i.test(msg) ? ' (Gateway did not answer in time)'
             : (/WebSocket closed mid-turn|WebSocket error mid-turn/i.test(msg) ? ''  // already explains reconnect

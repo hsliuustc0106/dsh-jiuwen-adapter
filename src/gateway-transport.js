@@ -63,6 +63,9 @@ export const INTERRUPTED_MARK = '⏹ (interrupted — a new message arrived; con
 /** Marker on text recovered from Jiuwen history after a mid-turn Gateway drop. */
 export const RECOVERED_MARK = '[Recovered from Jiuwen history after the Gateway connection dropped]'
 
+/** Unary Gateway commands that run a model call (and continue server-side after the caller gives up). */
+export const LLM_BACKED_RPCS = Object.freeze(new Set([COMMANDS.COMPACT, COMMANDS.BTW, COMMANDS.RECAP]))
+
 export class GatewayTransport {
   /**
    * @param {{
@@ -246,14 +249,25 @@ export class GatewayTransport {
     }
   }
 
-  /** Unary E2A RPC helper (opens a short-lived connection). */
+  /**
+   * Unary E2A RPC helper (opens a short-lived connection). Default answer budget: 30 s, except
+   * model-backed commands (LLM_BACKED_RPCS: compact / btw / recap run a full model call on the
+   * Gateway), which get one model call's budget, `requestTimeoutMs`. Their timeout error carries
+   * `mayStillComplete: true`: Jiuwen runs them in the background and keeps going after the
+   * connection closes, so a late answer is not a failure.
+   */
   async rpc(method, params = {}, { timeoutMs } = {}) {
     if (!this.WebSocketImpl) throw Object.assign(new Error('WebSocket unavailable'), { code: 'TRANSPORT' })
     const url = buildGatewayWsUrl(this.gatewayURL, this.auth)
     const ws = await this._connect(url)
+    const longRunning = LLM_BACKED_RPCS.has(method)
+    const budget = timeoutMs ?? (longRunning ? Math.max(30_000, this.requestTimeoutMs) : 30_000)
     try {
       await this._awaitAck(ws, Math.min(15_000, this.requestTimeoutMs))
-      return await this._unary(ws, method, params, timeoutMs ?? 30_000)
+      return await this._unary(ws, method, params, budget)
+    } catch (error) {
+      if (error?.code === 'TIMEOUT' && error.method === undefined) Object.assign(error, { method, timeoutMs: budget, mayStillComplete: longRunning })
+      throw error
     } finally {
       try { ws.close() } catch { /* ignore */ }
     }
