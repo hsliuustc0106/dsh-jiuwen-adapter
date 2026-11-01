@@ -374,7 +374,7 @@ if (WITH && has('--sync2') && api && !GW.includes(':1/')) sync2Out = await (asyn
     const sidP = `jw-s2p-${stamp}`; const hp = await mk(sidP); handles.push(hp)
     await sayOn(hp.agent, `TAG:p1${stamp} hi`)
     const p1 = byTag(`p1${stamp}`).at(-1)
-    ok('persona: plain dsh personaPrefix forwarded (generic), no boilerplate', p1?.persona && p1?.testAgent && !p1?.boiler, JSON.stringify(p1 || {}).slice(0, 140))
+    ok('persona: plain dsh system prompt forwarded once, persona first (injectSystem=full default forwards the whole host prompt)', p1?.persona && p1?.testAgent, JSON.stringify(p1 || {}).slice(0, 140))
     await sayOn(hp.agent, `TAG:p2${stamp} again`)
     const p2 = byTag(`p2${stamp}`).at(-1)
     ok('persona: not re-sent when unchanged (hash gate)', p2 && !p2.persona, JSON.stringify(p2 || {}).slice(0, 100))
@@ -445,8 +445,8 @@ if (WITH && has('--sync2') && api && !GW.includes(':1/')) sync2Out = await (asyn
     }
 
     // ── MCP passthrough: dsh-tools server registered in Jiuwen + model can call a dsh tool ──
-    const v = await api.mcpVerify?.().catch(e => ({ error: e.message }))
-    ok('mcp: dsh-tools server resolvable via mcp.show', v && !v.error && (v.ok ?? v.found ?? true), JSON.stringify(v).slice(0, 140))
+    const v = await api.mcpVerify?.(sidP).catch(e => ({ error: e.message }))
+    ok('mcp: the session\'s dsh-tools-<sha16> server resolvable via mcp.show', v && !v.error && (v.ok ?? v.found ?? true), JSON.stringify(v).slice(0, 140))
     const mcpLine = String(await api.command(sidP, 'mcp').catch(e => e.message))
     ok('/jiuwen mcp shows passthrough line', /dsh-tools/.test(mcpLine), mcpLine.split('\n').find(l => /dsh-tools/.test(l)))
 

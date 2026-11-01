@@ -185,3 +185,15 @@ test('title: deferred fallback title released at turn/end does not overwrite a n
   assert.equal(renames.at(-1), 'User Title')
   assert.equal(r.sessions.get('race').title, 'User Title')
 })
+
+test('permissions: dsh Auto preset (dsh-experimental-auto-review) maps to Jiuwen ask, not left at the previous level', async () => {
+  const r = rig()
+  const s = jw('pa')
+  r.fire('session/event', s, { type: 'permission/preset', data: { preset: 'workspace-write' } }); await tick()
+  r.fire('session/event', s, { type: 'permission/preset', data: { preset: 'read-only' } }); await tick()
+  r.fire('session/event', s, { type: 'permission/preset', data: { preset: 'auto' } }); await tick()
+  const levels = r.calls.filter(c => c[0] === 'permissions.tools.update' && c[1].tool === 'bash').map(c => c[1].level)
+  assert.deepEqual(levels, ['deny', 'ask'])
+  r.fire('session/event', s, { type: 'permission/preset', data: { preset: 'custom' } }); await tick()
+  assert.equal(r.calls.filter(c => c[0] === 'permissions.tools.update' && c[1].tool === 'bash').length, 2, 'derived "custom" state is not forwarded')
+})

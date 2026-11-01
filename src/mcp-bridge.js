@@ -38,9 +38,20 @@ export function sessionMcpName(base, sessionId) {
   return `${base}-${h}`
 }
 
-/** Desired Jiuwen registration for the stable proxy. */
-export function proxyRegistration(name, stateDir, callTimeoutMs) {
-  return { name, transport: 'stdio', command: process.execPath, args: [PROXY_PATH, stateDir], timeout_s: Math.ceil(callTimeoutMs / 1000) }
+/** Content revision of a published schema union (order-independent). */
+export function schemasRev(list) {
+  const sorted = [...(list || [])].sort((a, b) => String(a.name).localeCompare(String(b.name)))
+  return createHash('sha256').update(JSON.stringify(sorted)).digest('hex').slice(0, 12)
+}
+
+/**
+ * Desired Jiuwen registration for the stable proxy. `rev` (the schema-union revision) is part of
+ * the args on purpose: Jiuwen derives the MCP server_id from the registration payload and keeps a
+ * spawned stdio server cached per server_id (also across mcp.disconnect/connect), so its tool
+ * index only re-lists when the payload changes. The proxy ignores the extra arg.
+ */
+export function proxyRegistration(name, stateDir, callTimeoutMs, rev) {
+  return { name, transport: 'stdio', command: process.execPath, args: rev ? [PROXY_PATH, stateDir, `--rev=${rev}`] : [PROXY_PATH, stateDir], timeout_s: Math.ceil(callTimeoutMs / 1000) }
 }
 
 /**
@@ -289,45 +300,43 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     return { jsonrpc: '2.0', id, error: { code: -32601, message: `method not found: ${method}` } }
   }
 
-  /**
-   * Merge this turn's schemas into the proxy's schemas.json. Returns true only when the published
-   * tool set (names, descriptions, input schemas) actually changed on disk. The comparison is
-   * against the file itself, not an in-memory signature, so it stays correct across dsh
-   * processes sharing one session dir, adapter restarts, and a deleted/rewritten file.
-   */
+  /** Merge this session's schemas into its union; returns the union's revision. */
   function publishSchemas(e) {
     mkdirSync(e.stateDir, { recursive: true, mode: 0o700 })
     const f = join(e.stateDir, 'schemas.json')
-    let raw = null
-    try { raw = readFileSync(f, 'utf8') } catch { raw = null }
-    let prev = []
-    try { prev = raw ? JSON.parse(raw) : [] } catch { prev = [] }
-    if (!Array.isArray(prev)) prev = []
+    const prev = readJson(f, [])
+    // Never shrink: pruning made the union shrink and regrow, and each regrowth forced a reconnect
+    // that dropped the server from every live Jiuwen session. Stale names just error on call.
     const byName = new Map(prev.map(t => [t.name, t]))
     for (const sch of e.schemas.values()) {
       byName.set(sch.name, { name: sch.name, description: describeTool(sch), inputSchema: sch.parameters || sch.inputSchema || { type: 'object', properties: {} } })
     }
-    const next = JSON.stringify([...byName.values()])
-    if (next === raw) return false
-    writeAtomic(f, next, 0o644)
-    return true
+    const union = [...byName.values()]
+    writeAtomic(f, JSON.stringify(union), 0o644)
+    return schemasRev(union)
   }
 
-  async function ensureRegistered(e, changed) {
+  async function ensureRegistered(e, rev) {
+    // Same process, same revision, already registered: skip RPC (unit tests' mock rpc does not
+    // write jiuwen state.json; live Gateway keeps the record between prepares).
+    if (e.registered && e.lastRev === rev && !e.needsRegister) return { reused: true, rev }
     const c = cfg()
     // Jiuwen's MCP call timeout covers the whole call (approval wait + run) plus a margin, so the
     // adapter's own deadline answers first and Jiuwen never abandons a call that is still running.
-    const reg = proxyRegistration(e.name, e.stateDir, mcpCallTimeoutMs(c))
+    const reg = proxyRegistration(e.name, e.stateDir, mcpCallTimeoutMs(c), rev)
     const record = readJson(jiuwenState(), {})?.mcp?.[e.name]
     const timeoutMs = c.mcpRpcTimeoutMs ?? 30_000
-    if (isProxyConnected(record, reg)) {
-      // Reconnect only when the published tool set changed (the proxy re-reads tools/list on connect).
-      if (changed) { await rpc('mcp.disconnect', { name: reg.name }, { timeoutMs }); await rpc('mcp.connect', { name: reg.name }, { timeoutMs }) }
-      return { reused: !changed, reconnected: changed }
-    }
+    if (isProxyConnected(record, reg)) { e.lastRev = rev; return { reused: true, rev } }
+    // Our proxy at an older schema revision: a plain disconnect/connect would reuse Jiuwen's cached
+    // stdio server (stale tools/list, so tool_search never finds the new tools). Re-register with
+    // the new revision so Jiuwen spawns a fresh proxy and re-indexes.
+    const stale = record?.state === 'connected' && record.transport === 'stdio' && record.command === reg.command
+      && (record.args || [])[0] === PROXY_PATH && (record.args || [])[1] === reg.args[1]
+    if (stale) await rpc('mcp.disconnect', { name: reg.name }, { timeoutMs })
     await rpc('mcp.register_custom', reg, { timeoutMs })
     const r = await rpc('mcp.connect', { name: reg.name }, { timeoutMs })
-    return { registered: true, connect: r }
+    e.lastRev = rev
+    return stale ? { reconnected: true, rev, connect: r } : { registered: true, rev, connect: r }
   }
 
   function writeEp(e) {
@@ -517,18 +526,11 @@ export function createMcpBridge({ config, services, rpc, logger }) {
 
       const url = writeEp(e)
       try {
-        const changed = publishSchemas(e)
+        const rev = publishSchemas(e)
         writeEp(e)
-        let out = { url, mcpServerName: e.name }
-        if (e.needsRegister || !e.registered) {
-          Object.assign(out, await ensureRegistered(e, changed))
-          e.needsRegister = false
-          if (!out.error) e.registered = true
-        } else if (changed) {
-          Object.assign(out, await ensureRegistered(e, true))
-        } else {
-          out.reused = true
-        }
+        const out = { url, mcpServerName: e.name, ...(await ensureRegistered(e, rev)) }
+        e.needsRegister = false
+        if (!out.error) e.registered = true
         logger?.info?.(`[dsh-jiuwen] dsh tools exposed via per-session MCP "${e.name}" (${e.schemas.size} schema(s), session=${sessionId})`)
         return out
       } catch (error) {

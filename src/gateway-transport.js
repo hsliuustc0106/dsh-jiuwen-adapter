@@ -198,6 +198,19 @@ export class GatewayTransport {
       }
 
       if (this.documentPersist) params = await this._persistDocuments(ws, params)
+      // Interrupt-on-busy requested before this request went out (e.g. during the post-cancel settle):
+      // don't send it. Sending then cancelling at once makes Jiuwen drop the query unrecorded; the adapter
+      // carries this turn's text into the resend instead.
+      const b = turn.busy
+      if (b?.requested && !b.done && !signal?.aborted) {
+        turn.onEvent?.({ type: 'interrupt', intent: 'cancel', reason: 'busy-message', skipped: 'before-send' })
+        try { b.settled?.({ by: 'before-send', chars: 0, ms: 0, unsent: true }) } catch { /* ignore */ }
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'text-delta', index: 0, text: INTERRUPTED_MARK }
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: INTERRUPTED_MARK } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+        return
+      }
       ws.send(JSON.stringify({
         type: 'req',
         id: requestId,

@@ -8,7 +8,8 @@ test/helpers/mock-host.js mock-gateway on a random port + minimal Cordis-like ho
 test/fixtures/stand-in.mjs scripted OpenAI-compatible model (TAG/SLOW/REASON/HUGE/ERR500/ERRMID/TOOL:/MCP:)
 bin/mock-gateway.mjs      Gateway mock; a query with TAG: emulates Jiuwen in front of the stand-in
 test/live/run.mjs         npm run test:live (opt-in, real JiuwenSwarm)
-test/live/plain-dsh.mjs   npm run test:plain-dsh (opt-in, real dsh web profiles)
+test/live/plain-dsh.mjs   npm run test:plain-dsh (opt-in, real dsh web profiles, no FlyBot)
+test/live/commands.mjs    live /jiuwen command pass (run by test:live)
 test/live/plain-dsh/driver test-only dsh plugin that drives host services in a real profile
 test/live/lib.mjs         guards, stand-in launcher, Jiuwen snapshot + exact restore
 ```
@@ -27,6 +28,7 @@ test/live/lib.mjs         guards, stand-in launcher, Jiuwen snapshot + exact res
 | mcp-bridge | MCP verify, tools/call approval + execute, proxy lifecycle |
 | edge-cases, host-sync*, persona-generic | edge cases, resume, rename/fork, ask_user (Other strip), persona generic/minimal/`{{model}}` |
 | fuzz-gateway | adversarial frames |
+| busy-interrupt | onBusyMessage: interrupt, coalesce, deferred on approval, host stop wins, carry of a resend that was never sent |
 
 ## Opt-in live suites
 
@@ -44,10 +46,13 @@ npm run test:live
 | Step | Needs |
 |---|---|
 | live-gateway-smoke | `LIVE_SMOKE=1` and a working real model (it asks natural-language memory/tool questions) |
+| live /jiuwen commands (`test/live/commands.mjs`: rename, pause/resume, goal, workflows, history, btw, recap, supplement, skill-toggle, plan-status, compact, fork, archive/unarchive, delete, read-only listings) | `JW_USE_STANDIN_CMD`/`JW_RESTORE_CMD` |
 | live-deep (A–M, L, MCP tool_search invocation, ask_user card) | `JW_USE_STANDIN_CMD`/`JW_RESTORE_CMD` |
 | compat-runtime `--sync --sync2 --reload` | + `DSH_NM` |
 | live-drop-recovery | + `GW_KILL`/`GW_START` |
-| plain-dsh profile matrix + memory-module plugins (`PLAIN_DSH_ONLY=plain\|mem`) | + `DSH_BIN` (also standalone: `npm run test:plain-dsh`) |
+| plain-dsh profile matrix + extra plugins + interrupt-on-busy + memory-module plugins (`PLAIN_DSH_ONLY=plain\|ext\|busy\|mem`; `PLAIN_DSH_*_QUICK=1` runs only the adapter-last profile) | + `DSH_BIN` (also standalone: `npm run test:plain-dsh`) |
+
+Each step starts from the snapshot: a step that leaves global Jiuwen state changed (permissions, heartbeat, MCP) prints `NOTE … left Jiuwen state changed` and is reset. `LIVE_LOG_DIR=<dir>` keeps each step's full output.
 
 The stand-in (`test/fixtures/stand-in.mjs`) is started on `STANDIN_PORT` (18999) unless a server is already listening there. It logs to `STANDIN_LOG`.
 

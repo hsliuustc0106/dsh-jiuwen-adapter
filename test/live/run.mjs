@@ -9,38 +9,53 @@
 //   DSH_BIN                             dsh binary → also runs the plain-dsh profile matrix (plain-dsh.mjs)
 //   LIVE_SMOKE=1                        also run live-gateway-smoke against Jiuwen's real model
 //   LEAK_TURNS                          default 200
+//   LIVE_LOG_DIR                        write each step's full output there
 // Jiuwen state (config bytes, sessions, heartbeat, permissions, skills, MCP, jobs) is snapshotted first and
 // restored exactly at the end; the run fails if anything differs.
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
-import { ROOT, GATEWAY, STANDIN_LOG, gatewayUp, skip, startStandin, sh, waitGateway, snapshot, restore } from './lib.mjs'
+import { writeFileSync } from 'node:fs'
+import { ROOT, GATEWAY, STANDIN_LOG, gatewayUp, skip, startStandin, sh, waitGateway, snapshot, restore, jiuwenState } from './lib.mjs'
 
 if (process.env.JIUWEN_LIVE !== '1') skip('set JIUWEN_LIVE=1 to run the live suite against a real JiuwenSwarm')
 if (!(await gatewayUp())) skip(`Gateway offline at ${GATEWAY}`)
 const results = []
-const step = (name, args, env = {}) => {
+// Each step starts from the snapshot: whatever global Jiuwen state a step leaves (permissions, heartbeat, MCP)
+// is reported as a NOTE and reset before the next step, so steps cannot mask each other's checks.
+let snap
+const resetAfter = async (name) => {
+  if (!snap || !(await gatewayUp())) return
+  const s = await jiuwenState()
+  const left = Object.keys(snap.state).filter(k => k !== 'sessions' && JSON.stringify(s[k]) !== JSON.stringify(snap.state[k]))
+  if (left.length) console.log(`NOTE  ${name} left Jiuwen state changed: ${left.join(',')} (reset)`)
+  await restore(snap)
+}
+const step = async (name, args, env = {}, timeout = 900_000) => {
   const t0 = Date.now()
-  const r = spawnSync(process.execPath, args, { cwd: ROOT, env: { ...process.env, JIUWEN_GATEWAY_URL: GATEWAY, STANDIN_LOG, ...env }, encoding: 'utf8', timeout: 900_000, maxBuffer: 64e6 })
+  const r = spawnSync(process.execPath, args, { cwd: ROOT, env: { ...process.env, JIUWEN_GATEWAY_URL: GATEWAY, STANDIN_LOG, ...env }, encoding: 'utf8', timeout, maxBuffer: 64e6 })
   const out = `${r.stdout || ''}${r.stderr || ''}`
+  if (process.env.LIVE_LOG_DIR) { try { writeFileSync(join(process.env.LIVE_LOG_DIR, `${name.replace(/[^\w]+/g, '_').slice(0, 40)}.log`), out) } catch { /* ignore */ } }
   const fails = [...out.split('\n').filter(l => /^\s*FAIL\b/.test(l)), ...(out.match(/"FAIL [^"]*/g) || []).map(x => x.slice(1))]
   const ok = r.status === 0 && fails.length === 0 && !/^SKIP/m.test(out.slice(0, 200))
   results.push([name, ok, ((Date.now() - t0) / 1000).toFixed(0) + 's', fails.slice(0, 5)])
   console.log(`${ok ? 'PASS' : /^SKIP/m.test(out) ? 'SKIP' : 'FAIL'}  ${name}${fails.length ? '\n   ' + fails.join('\n   ') : ''}`)
+  await waitGateway(30_000); await resetAfter(name)
 }
 
-const snap = await snapshot()
+snap = await snapshot()
 const standin = await startStandin()
 const useStandin = !!process.env.JW_USE_STANDIN_CMD
 try {
   // live-gateway-smoke asks natural-language questions (memory, tool use): it needs Jiuwen's real model.
-  if (process.env.LIVE_SMOKE === '1') step('live-gateway-smoke (real model)', ['scripts/live-gateway-smoke.mjs'])
+  if (process.env.LIVE_SMOKE === '1') await step('live-gateway-smoke (real model)', ['scripts/live-gateway-smoke.mjs'])
   else console.log('SKIP live-gateway-smoke (needs a working real model; set LIVE_SMOKE=1)')
   if (useStandin) {
     sh(process.env.JW_USE_STANDIN_CMD); if (!(await waitGateway())) throw new Error('Gateway did not come back on the stand-in')
-    step('live-deep (A–M, L leak)', ['--expose-gc', 'scripts/live-deep.mjs'], { LEAK_TURNS: process.env.LEAK_TURNS || '200' })
-    if (process.env.DSH_NM) step('compat-runtime --sync --sync2 --reload', ['scripts/compat-runtime.mjs', '--jiuwen', `--gateway=${GATEWAY}`, '--sync', '--sync2', '--reload'])
-    if (process.env.GW_KILL && process.env.GW_START) { step('live-drop-recovery', ['scripts/live-drop-recovery.mjs']); await waitGateway() }
-    if (process.env.DSH_BIN) step('plain-dsh profile matrix', [join('test/live/plain-dsh.mjs')], { JIUWEN_LIVE_NESTED: '1' })
+    await step('live /jiuwen commands', ['test/live/commands.mjs'])
+    await step('live-deep (A–M, L leak)', ['--expose-gc', 'scripts/live-deep.mjs'], { LEAK_TURNS: process.env.LEAK_TURNS || '200' })
+    if (process.env.DSH_NM) await step('compat-runtime --sync --sync2 --reload', ['scripts/compat-runtime.mjs', '--jiuwen', `--gateway=${GATEWAY}`, '--sync', '--sync2', '--reload'])
+    if (process.env.GW_KILL && process.env.GW_START) { await step('live-drop-recovery', ['scripts/live-drop-recovery.mjs']); await waitGateway() }
+    if (process.env.DSH_BIN) await step('plain-dsh profile matrix (plain, ext, busy, mem)', [join('test/live/plain-dsh.mjs')], { JIUWEN_LIVE_NESTED: '1' }, 2_400_000)
   } else console.log('SKIP model-dependent sections (set JW_USE_STANDIN_CMD and JW_RESTORE_CMD)')
 } finally {
   if (useStandin) { sh(process.env.JW_RESTORE_CMD); await waitGateway() }

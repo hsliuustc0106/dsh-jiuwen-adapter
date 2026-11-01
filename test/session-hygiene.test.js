@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createMcpBridge, sessionMcpName, proxyRegistration, mcpCallTimeoutMs } from '../src/mcp-bridge.js'
+import { createMcpBridge, sessionMcpName, proxyRegistration, mcpCallTimeoutMs, schemasRev } from '../src/mcp-bridge.js'
 import { auxSessionId } from '../src/adapter.js'
 import { denyJiuwenSideEffectTools, resetSentPermissions } from '../src/fs-route.js'
 
@@ -21,7 +21,10 @@ function bridge(cfg = {}, rpcImpl) {
 const tools = [{ name: 'read', description: 'r' }, { name: 'bash', description: 'b' }]
 const markConnected = (c, sid) => {
   const name = sessionMcpName('dsh-tools', sid)
-  const reg = proxyRegistration(name, join(c.mcpStateDir, 's', name.slice(10)), mcpCallTimeoutMs(c))
+  const stateDir = join(c.mcpStateDir, 's', name.slice(10))
+  let rev
+  try { rev = schemasRev(JSON.parse(readFileSync(join(stateDir, 'schemas.json'), 'utf8'))) } catch { /* no union yet */ }
+  const reg = proxyRegistration(name, stateDir, mcpCallTimeoutMs(c), rev)
   writeFileSync(c.jiuwenMcpStateFile, JSON.stringify({ mcp: { [name]: { ...reg, state: 'connected' } } }))
 }
 
@@ -97,6 +100,10 @@ test('item2: reconnect only when the published tool set changes (names, descript
   assert.equal(count('mcp.disconnect'), d0 + 1, 'description change → reconnect')
   await b.prepare([...tools, { name: 'grep', description: 'g' }], 'h')
   assert.equal(count('mcp.disconnect'), d0 + 2, 'new tool → reconnect')
+  const name = sessionMcpName('dsh-tools', 'h')
+  const stateDir = join(c.mcpStateDir, 's', name.slice(10))
+  const rev = schemasRev(JSON.parse(readFileSync(join(stateDir, 'schemas.json'), 'utf8')))
+  writeFileSync(c.jiuwenMcpStateFile, JSON.stringify({ mcp: { [name]: { ...proxyRegistration(name, stateDir, mcpCallTimeoutMs(c), rev), state: 'connected' } } }))
   await b.dispose()
   // New process, same on-disk set, connected record → no register, no reconnect (survives restart).
   const b2 = createMcpBridge({ config: () => c, services: () => ({}), rpc: async (m, p) => { calls.push([m, p]); return {} } })

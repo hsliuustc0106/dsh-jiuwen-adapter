@@ -22,6 +22,12 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+- Fix (interrupt on busy): a message that arrived while the resend was still waiting out the post-cancel settle made the adapter send the resend and cancel it at once; Jiuwen dropped that query unrecorded, so the earlier message was lost. The resend is now not sent; its text is carried into the next resend (one note, `N new messages`). Found by the live plain-dsh busy phase (`PLAIN_DSH_ONLY=busy`).
+- Fix: `/jiuwen mcp` (and `jiuwenAdapter.mcpVerify(sessionId)`) checked the base server name `dsh-tools`, which per-session registration never creates, so it always said "not registered". It now reports the session's `dsh-tools-<sha16>` server. Live `compat-runtime --sync2` updated (per-session name; `injectSystem=full` forwards the whole host prompt by design).
+- Tests: `full-runtime.test.js` with `JIUWEN_LIVE=1` + `DSH_NM` (`compat-matrix --live`) left Jiuwen's global bash/write/edit at `deny`; it now snapshots and restores Jiuwen state.
+- Fix: MCP passthrough tools added or changed after Jiuwen started are now found by Jiuwen `tool_search`. The registration carries a schema revision, so Jiuwen spawns a fresh proxy instead of reusing its cached one.
+- Fix: the dsh Auto preset (auto-review) now maps to Jiuwen `ask`. Before, Jiuwen stayed at the previous level, e.g. deny after read-only.
+- Tests: live `/jiuwen` command pass (`test/live/commands.mjs`); plain-dsh extra-plugin phase (compaction, turn-outline, mcp-client, time-context, ralph, terminal, worktree, auto-review).
 - Interrupt on busy (`onBusyMessage: 'interrupt' | 'queue'`, default `interrupt`, env `JIUWEN_ON_BUSY_MESSAGE`; `interruptSettleMs`): a user message arriving while a Jiuwen turn runs interrupts it via `chat.interrupt`, coalesces all messages that arrived meanwhile into one step, and resends with a note that the previous turn was interrupted (side effects not rolled back). Deferred while an approval card is pending; host stop wins. New trace event `turn-interrupt`.
 - Memory-module plugins (agent-instructions, session-reference, session-search) verified with Jiuwen sessions.
   - Fix: read-only dsh session-query tools skip the passthrough approval gate (`toolApprovalExempt`); before, they hung Jiuwen turns until approval timed out.

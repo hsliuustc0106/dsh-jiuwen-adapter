@@ -21,6 +21,15 @@ function normalizer() {
   }
   return walk
 }
+// Union of the dsh-tools passthrough schema files (per-session dirs `s/<key>/`, plus the legacy single file).
+function mcpSchemaNames(re) {
+  const root = `${process.env.HOME}/.cache/dsh-jiuwen/mcp/dsh-tools`
+  const files = [`${root}/schemas.json`]
+  try { for (const d of FS.readdirSync(`${root}/s`)) files.push(`${root}/s/${d}/schemas.json`) } catch {}
+  const names = new Set()
+  for (const f of files) { try { for (const x of JSON.parse(FS.readFileSync(f, 'utf8'))) if (re.test(x.name)) names.add(x.name) } catch {} }
+  return names.size ? [...names].sort() : `ERR no schemas under ${root}`
+}
 export function apply(ctx) {
   const OUT = process.env.DRIVER_OUT
   if (!OUT) return
@@ -78,6 +87,83 @@ export function apply(ctx) {
       r.types = [...new Set(evs(id).map(e => e.type))].sort()
       r.hash = createHash('sha1').update(JSON.stringify(r.events)).digest('hex').slice(0, 16)
       return r
+    }
+    // Extra plugins (MODE=ext): compaction, session-turn-outline, mcp-client (echo), time-context, ralph, terminal, worktree, auto-review.
+    if (MODE === 'ext') {
+      const api = g('jiuwenAdapter')
+      const sl = () => { try { return require_fs().readFileSync((process.env.STANDIN_LOG || '/tmp/standin.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return {} } }) } catch { return [] } }
+      const last = tag => sl().filter(x => x.tag === tag && !/Generate the session title/.test(x.last || '')).at(-1)
+      out.ext = { tools: (() => { try { const t = g('tools'); return (t.list?.() || t.names?.() || []).map(x => x?.name || x).filter(n => /ralph|terminal|worktree|echo|mcp__/i.test(n)).sort() } catch (e) { return 'ERR ' + e.message } })() }
+      const routes = [['p', { provider: 'standin', model: 'standin-m1' }], ...(api ? [['j', { provider: 'jiuwen', model: 'jiuwen-default' }]] : [])]
+      for (const [k, model] of routes) {
+        const r = out.ext[k] = {}
+        try {
+          const { sessionId: id } = await sc.create({ cwd: SANDBOX }, new AbortController().signal); await sc.selectModel({ sessionId: id, ...model }, new AbortController().signal)
+          for (let i = 1; i <= 3; i++) await prompt(id, `TAG:${k}x${i} turn ${i} ` + 'filler '.repeat(200))
+          r.replies = [1, 2, 3].map(i => /stand-in reply/.test(evs(id).filter(e => e.type === 'assistant/message').map(e => textOf(e.data.message))[i - 1] || ''))
+          r.timeCtx = [1, 2, 3].map(i => last(`${k}x${i}`)?.timeCtx)
+          const sess = sessions.get(id)
+          try { r.outline = g('sessionProjections')?.stateOf?.(sess, 'turnOutline')?.turns?.length } catch (e) { r.outline = 'ERR ' + e.message }
+          const jw0 = api?.sessions.get(id)?.jiuwenSessionId
+          const cnt = async () => ((await api.gateway.rpc('session.list', { limit: 500 }))?.sessions || []).find(x => x.session_id === jw0)?.message_count
+          const before = k === 'j' ? await cnt() : undefined
+          try { const ag = agentOf(id); const cs = g('agentPresets')?.serviceFor?.(ag, 'compaction') ?? g('compaction'); r.compactSvc = !!cs; const res = await cs.compactNow(ag, new AbortController().signal); r.compact = res === null ? 'null' : typeof res } catch (e) { r.compact = 'ERR ' + String(e.message).slice(0, 160) }
+          await waitIdle(id, 30_000)
+          r.compactEvents = evs(id).filter(e => /compact/i.test(e.type)).map(e => e.type)
+          await prompt(id, `TAG:${k}x4 after compaction`)
+          r.afterCompact = lastReply(id); r.afterUsers = last(`${k}x4`)?.users
+          if (k === 'j') { r.jwSame = api.sessions.get(id)?.jiuwenSessionId === jw0; r.msgBefore = before; r.msgAfter = await cnt() }
+          // mcp-client echo tool (non-jiuwen: direct tool call; jiuwen: via dsh-tools passthrough, approval-gated → bounded deny)
+          const t0 = Date.now()
+          await prompt(id, `TAG:${k}echo ${k === 'j' ? 'MCP' : 'TOOL'}:mcp__echo__echo:{"text":"hi-${k}"}`)
+          r.echo = { reply: lastReply(id).slice(0, 200), ms: Date.now() - t0, picked: sl().filter(x => x.tag === `${k}echo` && x.picked).at(-1)?.picked }
+          // auto-review preset
+          try { const pp = g('permissionPresets'); const cat = pp.catalog?.(); r.catalog = Array.isArray(cat) ? cat.map(x => x?.name || x?.id || x) : Object.keys(cat?.presets || cat || {}); const p0 = k === 'j' ? await api.gateway.rpc('permissions.tools.get', {}) : null; pp.set(sess, 'read-only'); await tick(800); const p1 = k === 'j' ? await api.gateway.rpc('permissions.tools.get', {}) : null; pp.set(sess, 'auto'); await tick(800); r.presetAuto = pp.current(sess); const p2 = k === 'j' ? await api.gateway.rpc('permissions.tools.get', {}) : null; r.perm = k === 'j' ? { ro: p1?.tools?.bash, auto: p2?.tools?.bash, base: p0?.tools?.bash } : undefined; r.perm0 = p0 } catch (e) { r.preset = 'ERR ' + e.message }
+          if (k === 'j') r.jwId = jw0
+        } catch (e) { err(`ext ${k}`, e.stack || e) }
+      }
+      out.ext.schemas = mcpSchemaNames(/ralph|terminal|worktree|echo/i)
+      out.listeners1 = L(); out.unhandled = unhandled
+      writeFileSync(OUT, JSON.stringify(out, null, 1)); return
+    }
+    // Interrupt-on-busy (MODE=busy, PR #4): a slow turn, then two user messages while it runs.
+    // jiuwen: chat.interrupt, the two messages coalesce into ONE resend step with the interruption note.
+    // non-jiuwen: dsh's own queueing, which must be identical with / without the adapter.
+    if (MODE === 'busy') {
+      const api = g('jiuwenAdapter')
+      const sl = () => { try { return require_fs().readFileSync((process.env.STANDIN_LOG || '/tmp/standin.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return {} } }) } catch { return [] } }
+      out.busy = {}
+      const base = sl().length // the stand-in log is shared across runs: only look at this run's requests
+      const mine = () => sl().slice(base)
+      const routes = [['p', { provider: 'standin', model: 'standin-m1' }], ...(api ? [['j', { provider: 'jiuwen', model: 'jiuwen-default' }]] : [])]
+      const send = (id, text) => sc.prompt({ requestId: `r-${randomUUID()}`, sessionId: id, mode: 'queue', content: [{ type: 'text', text }] }, new AbortController().signal).catch(e => err(`busy send ${text.slice(0, 20)}`, e))
+      for (const [k, model] of routes) {
+        const r = out.busy[k] = {}
+        try {
+          const { sessionId: id } = await sc.create({ cwd: SANDBOX }, new AbortController().signal); await sc.selectModel({ sessionId: id, ...model }, new AbortController().signal)
+          await prompt(id, `TAG:${k}b0 warm up`)
+          const n0 = evs(id).filter(e => e.type === 'assistant/message').length
+          const t0 = Date.now()
+          send(id, `TAG:${k}b1 SLOW12000 long task`)
+          await tick(3000)
+          send(id, `TAG:${k}b2 actually do this instead`)
+          await tick(400)
+          send(id, `TAG:${k}b3 and this too`)
+          await tick(1500); await waitIdle(id, 90_000)
+          r.ms = Date.now() - t0
+          r.replies = evs(id).filter(e => e.type === 'assistant/message').slice(n0).map(e => textOf(e.data.message).slice(0, 160))
+          r.reqs = mine().filter(x => /^(p|j)b[123]$/.test(x.tag) && x.tag.startsWith(k) && !/Generate the session title/.test(x.last || '')).map(x => ({ tag: x.tag, users: x.users, note: !!x.busyNote, tags: x.tags, last: (x.last || '').slice(0, 120) }))
+          r.types = [...new Set(evs(id).map(e => e.type))].sort()
+          if (k === 'j') {
+            r.jwId = api.sessions.get(id)?.jiuwenSessionId
+            // the next turn is a normal turn again (no stale note)
+            await prompt(id, `TAG:${k}b4 next`)
+            r.after = { reply: lastReply(id).slice(0, 120), note: !!mine().filter(x => x.tag === 'jb4').at(-1)?.busyNote }
+          }
+        } catch (e) { err(`busy ${k}`, e.stack || e) }
+      }
+      out.listeners1 = L(); out.unhandled = unhandled
+      writeFileSync(OUT, JSON.stringify(out, null, 1)); return
     }
     // Memory-module plugins (MODE=mem): dsh-agent-instructions (AGENTS.md), dsh-session-reference (dsh-session:<id>),
     // dsh-experimental-session-search (session_search tool), checked for a non-jiuwen and a jiuwen session.
@@ -158,7 +244,8 @@ export function apply(ctx) {
           await prompt(mid, 'TAG:jwm1 hi'); await prompt(mid, 'TAG:jwm2 again')
           const sl2 = require_fs().readFileSync((process.env.STANDIN_LOG || '/tmp/standin.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return {} } })
           const m1 = sl2.filter(x => x.tag === 'jwm1').at(-1), m2 = sl2.filter(x => x.tag === 'jwm2').at(-1)
-          ok('dsh-persona preset (minimal, complete prompt) → forwarded once; web default persona not forwarded', m1?.persona && !m2?.persona && !t1?.persona, JSON.stringify({ m1: m1?.persona, m2: m2?.persona, def: t1?.persona }))
+          // injectSystem=full (default since PR #3): the whole host system prompt, the web default persona included, is forwarded once per session and not resent unchanged.
+          ok('dsh-persona preset (minimal) and the web default prompt → forwarded once, not resent unchanged', m1?.persona && !m2?.persona && t1?.persona && !t2?.persona, JSON.stringify({ m1: m1?.persona, m2: m2?.persona, def1: t1?.persona, def2: t2?.persona }))
           out.minimalId = api.sessions.get(mid)?.jiuwenSessionId
         } catch (e) { err('minimal preset', e) }
         out.jwIds = [m?.jiuwenSessionId, fm?.jiuwenSessionId]

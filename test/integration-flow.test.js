@@ -38,8 +38,13 @@ test('integration: skill injection hash persists across restart; re-sent only wh
 })
 
 test('integration: interrupted turn → resend carries the note once, injected state committed by the first event', async () => {
-  let note = '[previous turn interrupted]'
-  const busy = { takeNote: () => { const n = note; note = undefined; return n }, begin: () => ({ attach() {}, settled() {}, end() {} }), clearNote() {}, setAwaiting() {} }
+  let pending = { note: '[previous turn interrupted]', count: 1 }
+  const busy = {
+    takeResend: () => { const r = pending; pending = undefined; return r },
+    begin: () => ({ attach() {}, settled() {}, end() {} }),
+    clearNote() {},
+    setAwaiting() {},
+  }
   const r = makeRig({ injectSystem: 'full', onBusyMessage: 'interrupt' }, { busy })
   const SYS = '# Rules\nBe terse.'
   r.setScript(() => [{ event: { type: 'text' } }, { end: { reason: { kind: 'stop' } } }])

@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
-import { createMcpBridge, matchesAllowlist, proxyRegistration, isProxyConnected, sessionMcpName, PROXY_PATH, mcpCallTimeoutMs } from '../src/mcp-bridge.js'
+import { createMcpBridge, matchesAllowlist, proxyRegistration, isProxyConnected, sessionMcpName, schemasRev, PROXY_PATH, mcpCallTimeoutMs } from '../src/mcp-bridge.js'
 
 const tmp = mkdtempSync(join(tmpdir(), 'jw-mcp-test-'))
 process.on('exit', () => rmSync(tmp, { recursive: true, force: true }))
@@ -44,27 +44,30 @@ test('registers a per-session stdio proxy; dispose never disconnects; reconnect 
   assert.equal(calls[0][1].name, name)
   assert.equal(calls[0][1].transport, 'stdio')
   const stateDir = join(tmp, 'state', 's', name.slice('dsh-tools-'.length))
-  assert.deepEqual(calls[0][1].args, [PROXY_PATH, stateDir])
+  const union = () => JSON.parse(readFileSync(join(stateDir, 'schemas.json'), 'utf8'))
+  assert.deepEqual(calls[0][1].args, [PROXY_PATH, stateDir, `--rev=${schemasRev(union())}`])
   const ep = join(stateDir, `ep-${process.pid}.json`)
   assert.ok(existsSync(ep))
-  assert.deepEqual(JSON.parse(readFileSync(join(stateDir, 'schemas.json'), 'utf8')).map(t => t.name), ['read', 'web_fetch', 'orchestrator_report'])
+  assert.deepEqual(union().map(t => t.name), ['read', 'web_fetch', 'orchestrator_report'])
   await b.prepare(schemas, 's1')
   assert.equal(calls.length, 2)
   await b.dispose()
   assert.equal(calls.length, 2, 'no mcp.disconnect / delete_custom on dispose')
   assert.ok(!existsSync(ep))
-  // Next prepare with connected record → reuse
-  const reg = proxyRegistration(name, stateDir, mcpCallTimeoutMs(base))
+  // Next prepare with connected record at the same revision → reuse
+  const reg = proxyRegistration(name, stateDir, mcpCallTimeoutMs(base), schemasRev(union()))
   writeFileSync(join(tmp, 'jiuwen-state.json'), JSON.stringify({ mcp: { [name]: { ...reg, state: 'connected' } } }))
   assert.ok(isProxyConnected({ ...reg, state: 'connected' }, reg))
   const next = bridge({})
   const r2 = await next.b.prepare(schemas, 's1')
   assert.equal(r2.reused, true)
   assert.equal(next.calls.length, 0)
-  // New tool name → reconnect
+  // New tool name → re-register at the new revision (a plain reconnect reuses Jiuwen's cached server)
   const more = bridge({}, { toolAllowlist: ['*'] })
-  await more.b.prepare(schemas, 's1')
-  assert.deepEqual(more.calls.map(c => c[0]), ['mcp.disconnect', 'mcp.connect'])
+  const r3 = await more.b.prepare(schemas, 's1')
+  assert.deepEqual(more.calls.map(c => c[0]), ['mcp.disconnect', 'mcp.register_custom', 'mcp.connect'])
+  assert.equal(r3.reconnected, true)
+  assert.deepEqual(more.calls[1][1].args, [PROXY_PATH, stateDir, `--rev=${schemasRev(union())}`])
   await next.b.dispose(); await more.b.dispose()
   const u = await more.b.unregister()
   assert.ok(u.disconnect && u.delete)
@@ -384,4 +387,71 @@ test('prepare([]) (host-sync "ensure proxy") keeps the admitted schemas: tools/c
   assert.deepEqual(b.exposed('s-keep'), ['read'])
   assert.equal(await b.prepare([], 'fresh-empty'), null)
   await b.dispose()
+})
+
+test('mcp-client tools (mcp__server__tool) via passthrough: approval-gated; no answer → bounded "(timeout)" deny, not a hang', async () => {
+  const tools = { get: () => ({ execute: async () => 'should-not-run' }) }
+  const agents = { get: () => ({ id: 's', ctx: { tools: { get: () => null } } }) }
+  const { b } = bridge({ tools, agents, approval: { request: async () => new Promise(() => {}) } }, { toolAllowlist: ['mcp__*'], approvalTimeoutMs: 80 })
+  // Keep the event loop alive while approvalTimeoutMs fires (otherwise a hanging Promise starves the timer).
+  const keep = setInterval(() => {}, 1000)
+  try {
+    await b.prepare([{ name: 'mcp__echo__echo', description: 'e', parameters: { type: 'object', properties: { text: { type: 'string' } } } }], 's-echo')
+    const r = await b._handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'mcp__echo__echo', arguments: { text: 'hi' } } }, 's-echo')
+    assert.equal(r.result.isError, true); assert.match(r.result.content[0].text, /dsh denied mcp__echo__echo \(timeout\)/)
+  } finally { clearInterval(keep); await b.dispose() }
+})
+
+test('stale tool index: a connected proxy at an older schema revision is re-registered (new args → new Jiuwen server_id), same revision is reused', async () => {
+  const sid = 'rev-s1'
+  const name = sessionMcpName('dsh-tools', sid)
+  const stateDir = join(tmp, 'state', 's', name.slice('dsh-tools-'.length))
+  const st = join(tmp, 'rev-jw.json')
+  const cfg = { jiuwenMcpStateFile: st, toolAllowlist: ['*'] }
+  // Jiuwen started while schemas.json held another (stale) tool set; record has the pre-revision args.
+  writeFileSync(st, JSON.stringify({ mcp: { [name]: { ...proxyRegistration(name, stateDir, 1000), state: 'connected' } } }))
+  const a = bridge({}, cfg)
+  const r = await a.b.prepare([{ name: 'deep_echo', description: 'e' }], sid)
+  assert.deepEqual(a.calls.map(c => c[0]), ['mcp.disconnect', 'mcp.register_custom', 'mcp.connect'])
+  assert.equal(r.reconnected, true)
+  const rev = schemasRev(JSON.parse(readFileSync(join(stateDir, 'schemas.json'), 'utf8')))
+  assert.equal(r.rev, rev); assert.deepEqual(a.calls[1][1].args.slice(2), [`--rev=${rev}`])
+  // Gateway now holds the new revision → a second process with the same tools makes no RPC.
+  writeFileSync(st, JSON.stringify({ mcp: { [name]: { ...a.calls[1][1], state: 'connected' } } }))
+  const b = bridge({}, cfg)
+  assert.equal((await b.b.prepare([{ name: 'deep_echo', description: 'e' }], sid)).reused, true)
+  assert.equal(b.calls.length, 0)
+  // Same names but a changed schema also gets a new revision.
+  const c = bridge({}, cfg)
+  await c.b.prepare([{ name: 'deep_echo', description: 'e2' }], sid)
+  assert.deepEqual(c.calls.map(x => x[0]), ['mcp.disconnect', 'mcp.register_custom', 'mcp.connect'])
+  // Another server's record with the same name is not disconnected (only re-registered).
+  writeFileSync(st, JSON.stringify({ mcp: { [name]: { name, transport: 'stdio', command: 'other', args: [], state: 'connected' } } }))
+  const d = bridge({}, cfg)
+  await d.b.prepare([{ name: 'deep_echo', description: 'e3' }], sid)
+  assert.deepEqual(d.calls.map(x => x[0]), ['mcp.register_custom', 'mcp.connect'])
+  for (const x of [a, b, c, d]) await x.b.dispose()
+})
+
+test('proxy ignores the --rev arg', async () => {
+  const dir = join(tmp, 'rev-proxy')
+  const { mkdirSync } = await import('node:fs'); mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'schemas.json'), JSON.stringify([{ name: 'x', description: 'x', inputSchema: { type: 'object' } }]))
+  const p = spawn(process.execPath, [PROXY_PATH, dir, '--rev=abc'], { stdio: ['pipe', 'pipe', 'inherit'] })
+  const line = await new Promise((res) => { let buf = ''; p.stdout.on('data', (d) => { buf += d; const i = buf.indexOf('\n'); if (i >= 0) res(JSON.parse(buf.slice(0, i))) }); p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) + '\n') })
+  assert.deepEqual(line.result.tools.map(t => t.name), ['x'])
+  p.stdin.end()
+})
+
+test('/jiuwen mcp reports this session\'s per-session passthrough server (was: base name, always "not registered")', async () => {
+  const { createJiuwenCommand } = await import('../src/commands.js')
+  const name = sessionMcpName('dsh-tools', 'sess-a')
+  const b = createMcpBridge({ config: () => ({ mcpServerName: 'dsh-tools' }), services: () => ({}), logger: {}, rpc: async (m, p) => {
+    if (m === 'mcp.show' && p.name === name) return { type: 'detail', item: { name, category: 'custom', connection_state: 'connected', tools: [{ name: 'bash' }, { name: 'read' }] } }
+    throw new Error(`SkillHub asset not found: ${p?.name}`)
+  } })
+  const cmd = createJiuwenCommand({ sessions: { ensure: () => ({ jiuwenSessionId: 'j' }) }, gateway: () => ({ mcpList: async () => ({ items: [{ name: 'github', connection_state: 'disconnected' }] }) }), config: () => ({ mcpServerName: 'dsh-tools' }), mcpBridge: b })
+  const out = await cmd.run('sess-a', 'mcp')
+  assert.match(out, new RegExp(`dsh tool passthrough: ${name} \\(custom, connected, 2 tools\\)`), out)
+  assert.equal((await b.verify('sess-a')).registered, true)
 })

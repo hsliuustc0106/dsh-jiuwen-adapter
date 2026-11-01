@@ -165,6 +165,8 @@ Precedence: request > catalog model entry > plugin config.
 
 With `hostSync: false` (and `sessionSync`/`planBridge` off) behaviour matches the pre-sync adapter: no global listeners besides the plugin's own dispose, no host service is written except `ctx.provide(serviceName)`, no default model / permission preset / built-in command / tool is touched, and only namespaced names are used (`/jiuwen`, `jiuwen/*` events, `jiuwen_*` tools, `jiuwenAdapter`). Gateway methods are feature-detected (an `unknown method` answer is cached per Gateway URL; the subcommand soft-fails and disappears from `/jiuwen help`). Covered by `test/compat.test.js`.
 
+**Permission presets → Jiuwen:** read-only → deny, workspace-write → ask, full/danger-full-access → allow, auto (dsh-experimental-auto-review) → ask. The derived `custom` state is not forwarded.
+
 
 ## Validation
 
@@ -207,8 +209,9 @@ Interactions:
 | Jiuwen question card pending (`ask_user`) | Unchanged: the typed message supersedes the question (existing behaviour), no extra interrupt |
 | Host stop / cancel | Wins: the turn ends `aborted` (normal cancel path), nothing is promoted and no note is sent |
 | Turn already finishing (terminal `chat.final` seen) | Not interrupted; the message is handled next as usual |
+| Another message arrives while the resend is still waiting out `postCancelSettleMs` (before its `chat.send`) | The resend is not sent (send-then-cancel makes Jiuwen drop the query unrecorded). Its text is carried into the next resend: one note (`N new messages`), the carried text, then the newest message(s). `settled` trace: `settledBy: before-send`, `carried` |
 | Compaction / title (aux calls) | Never interrupted; they are local and not Jiuwen turns |
 | `injectSystem` (host system prompt) | Unaffected; the hash-gated block is prepended before the note as before |
 
 Trace (`traceFile`): `{"at":"turn-interrupt","phase":"requested"|"deferred"|"coalesced"|"settled"|"resend", …}`
-(`settled` carries `messages`, `promoted`, `waitedMs`, `settledBy`), plus `turn-end` with `interrupted:true`.
+(`settled` carries `messages`, `promoted`, `waitedMs`, `settledBy`, and `carried` when text is carried), plus `turn-end` with `interrupted:true`.
