@@ -88,7 +88,7 @@ export interface JiuwenAdapterConfig {
   /** Best-effort secret masking of the skill loader tool output (default true). */
   redactSkillOutput?: boolean
   /** Per-session overrides by dsh session id glob; first match wins. */
-  sessionOverrides?: Array<{ match: string, modelName?: string, chatMode?: string, agentTemplateName?: string }>
+  sessionOverrides?: Array<{ preset?: string, match?: string, modelName?: string, chatMode?: string, agentTemplateName?: string }>
   /** Route Jiuwen built-in bash/write_file/edit_file to the dsh MCP passthrough tools. */
   mapJiuwenFsToDsh?: boolean
   /** Jiuwen steps in reasoning: summary | full (default; structured Markdown). */

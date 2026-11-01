@@ -215,13 +215,19 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
               overrides.mcp = [...(overrides.mcp || []), ...mapping.mcpNames]
             }
           }
-          // sessionOverrides: generic per-session-id glob knobs (model/chat mode/template); explicit request + /jiuwen mode win.
+          // sessionOverrides: per-profile defaults (host agent preset / profile, or a session-id glob).
+          // Precedence: request > catalog model > /jiuwen mode|model (mapping) > sessionOverrides > plugin defaults.
           {
-            const so = matchSessionOverride(cfg.sessionOverrides, dshSessionId)
+            let profile
+            try { profile = deps.profileFor?.(dshSessionId) } catch { profile = undefined }
+            const so = matchSessionOverride(cfg.sessionOverrides, dshSessionId, profile)
             if (so) {
-              if (so.modelName && !overrides.modelName) overrides.modelName = so.modelName
-              if (so.chatMode && !mapping.chatMode) overrides.chatMode = so.chatMode
-              if (so.agentTemplateName && !mapping.agentTemplateName) overrides.agentTemplateName = so.agentTemplateName
+              const req = options?.providerOptions?.jiuwen || options?.metadata?.jiuwen || options?.jiuwen || {}
+              const catalog = cfg.models.find(m => m.id === options?.model)
+              const explicit = (k) => req[k] !== undefined || catalog?.[k] !== undefined || mapping[k] !== undefined
+              if (so.modelName && !explicit('modelName') && !(cfg.forwardModelName && options?.model && !catalog) && !(cfg.discoveryPrefix && String(options?.model || '').startsWith(cfg.discoveryPrefix))) overrides.modelName = so.modelName
+              if (so.chatMode && !explicit('chatMode')) overrides.chatMode = so.chatMode
+              if (so.agentTemplateName && !explicit('agentTemplateName')) overrides.agentTemplateName = so.agentTemplateName
             }
           }
           if (overrides.supportsUserInteraction === 'auto') overrides.supportsUserInteraction = Boolean(deps.hasUserQuestions?.())
@@ -537,12 +543,19 @@ export async function loadJiuwenAdapterClass() {
   }
 }
 
-/** First sessionOverrides entry whose `match` glob (`*` wildcard) matches the dsh session id. */
-export function matchSessionOverride(list, id) {
+const globRe = (g) => new RegExp(`^${String(g).split('*').map(x => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`)
+/**
+ * First sessionOverrides entry that matches. An entry may set `preset` (glob on the host agent
+ * preset / profile name, preferred) and/or `match` (glob on the dsh session id, legacy); every key
+ * it sets must match. Entries with neither never match.
+ */
+export function matchSessionOverride(list, id, profile) {
   if (!Array.isArray(list) || !list.length || !id) return undefined
   for (const o of list) {
-    const re = new RegExp(`^${String(o.match).split('*').map(x => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`)
-    if (re.test(String(id))) return o
+    if (!o || (typeof o.preset !== 'string' && typeof o.match !== 'string')) continue
+    if (typeof o.preset === 'string' && !(profile && globRe(o.preset).test(String(profile)))) continue
+    if (typeof o.match === 'string' && !globRe(o.match).test(String(id))) continue
+    return o
   }
   return undefined
 }

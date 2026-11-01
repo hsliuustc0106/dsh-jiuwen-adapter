@@ -118,6 +118,14 @@ export function apply(ctx, config = {}) {
   const AdapterClass = createJiuwenAdapter(LlmAdapter, {
     busy,
     personaFor: (id) => personaCapture.get(id),
+    // sessionOverrides `preset`: the host agent's preset/profile name (best-effort across host shapes).
+    profileFor: (id) => {
+      let agent
+      try { agent = service('agents')?.get?.(id) } catch { return undefined }
+      const v = agent?.preset?.name ?? agent?.presetName ?? agent?.preset?.id ?? (typeof agent?.preset === 'string' ? agent.preset : undefined)
+        ?? agent?.profile?.name ?? (typeof agent?.profile === 'string' ? agent.profile : undefined)
+      return v === undefined ? undefined : String(v)
+    },
     // Wait (bounded) for host→Jiuwen work a turn depends on: a fork remap, the first skill sync.
     awaitHostSync: async (id) => {
       const p = hostSync?.pendingFor?.(id)

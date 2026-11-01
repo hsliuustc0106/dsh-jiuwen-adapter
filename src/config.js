@@ -258,10 +258,10 @@ export function resolveConfig(raw = {}, opts = {}) {
     /** Best-effort secret masking on the skill loader tool's passthrough output. */
     redactSkillOutput: raw.redactSkillOutput !== false,
     skillLoaderTool: firstNonEmpty(env.JIUWEN_SKILL_LOADER_TOOL, typeof raw.skillLoaderTool === 'string' ? raw.skillLoaderTool : undefined) || 'skill',
-    /** Per-session overrides by dsh session id glob, e.g. [{ match: 'worker-*', modelName: 'x', chatMode: 'agent' }]. First match wins; empty by default. */
+    /** Per-profile overrides: [{ preset: 'reviewer*', modelName, chatMode, agentTemplateName }] (host agent preset/profile glob; `match` = legacy session-id glob). First match wins; empty by default. */
     sessionOverrides: (Array.isArray(raw.sessionOverrides) ? raw.sessionOverrides : [])
-      .filter(o => o && typeof o.match === 'string')
-      .map(o => ({ match: o.match, ...(typeof o.modelName === 'string' ? { modelName: o.modelName } : {}), ...(typeof o.chatMode === 'string' ? { chatMode: o.chatMode } : {}), ...(typeof o.agentTemplateName === 'string' ? { agentTemplateName: o.agentTemplateName } : {}) })),
+      .filter(o => o && (typeof o.match === 'string' || typeof o.preset === 'string'))
+      .map(o => ({ ...(typeof o.match === 'string' ? { match: o.match } : {}), ...(typeof o.preset === 'string' ? { preset: o.preset } : {}), ...(typeof o.modelName === 'string' ? { modelName: o.modelName } : {}), ...(typeof o.chatMode === 'string' ? { chatMode: o.chatMode } : {}), ...(typeof o.agentTemplateName === 'string' ? { agentTemplateName: o.agentTemplateName } : {}) })),
     syncPause: syncBit('syncPause', 'JIUWEN_SYNC_PAUSE'),
     syncPermissions: syncBit('syncPermissions', 'JIUWEN_SYNC_PERMISSIONS'),
     syncFork: syncBit('syncFork', 'JIUWEN_SYNC_FORK'),
