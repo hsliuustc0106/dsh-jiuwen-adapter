@@ -257,6 +257,9 @@ export function resolveConfig(raw = {}, opts = {}) {
     /** Host skills Jiuwen lacks: index (default; name+description once, bodies loaded on demand via skillLoaderTool) | body (legacy inline bodies) | off. Falls back to body when the loader tool is not passed through. */
     hostSkillInject: pickEnum(env.JIUWEN_HOST_SKILL_INJECT || raw.hostSkillInject, ['index', 'body', 'off'], 'index'),
     /** Passthrough host tool that returns a skill body by name (dsh: `skill`). */
+    /** Host skills Jiuwen lacks: forward at most this many per sync, each body capped at skillBodyMaxChars (a truncation marker is appended). */
+    skillSyncMax: Number(raw.skillSyncMax ?? env.JIUWEN_SKILL_SYNC_MAX ?? 20),
+    skillBodyMaxChars: Number(raw.skillBodyMaxChars ?? env.JIUWEN_SKILL_BODY_MAX_CHARS ?? 4000),
     /** Best-effort secret masking on the skill loader tool's passthrough output. */
     redactSkillOutput: raw.redactSkillOutput !== false,
     skillLoaderTool: firstNonEmpty(env.JIUWEN_SKILL_LOADER_TOOL, typeof raw.skillLoaderTool === 'string' ? raw.skillLoaderTool : undefined) || 'skill',

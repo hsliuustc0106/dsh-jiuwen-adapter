@@ -89,6 +89,10 @@ export interface JiuwenAdapterConfig {
   skillLoaderTool?: string
   /** Best-effort secret masking of the skill loader tool output (default true). */
   redactSkillOutput?: boolean
+  /** Max host skills forwarded per sync (default 20). */
+  skillSyncMax?: number
+  /** Max chars per forwarded host skill body; longer bodies get a truncation marker (default 4000). */
+  skillBodyMaxChars?: number
   /** Per-session overrides by dsh session id glob; first match wins. */
   sessionOverrides?: Array<{ preset?: string, match?: string, modelName?: string, chatMode?: string, agentTemplateName?: string }>
   /** Route Jiuwen built-in bash/write_file/edit_file to the dsh MCP passthrough tools. */

@@ -225,13 +225,18 @@ export function installHostSync(deps) {
       // skills.list() returns summaries without bodies: load bodies of unknown skills via get().
       const unknown = []
       if (f.syncSkillInstall) {
-        for (const name of enabled.filter(n => !jwNames.has(n)).slice(0, 20)) {
+        const c = config()
+        const maxSkills = posInt(c.skillSyncMax, 20)
+        const maxChars = posInt(c.skillBodyMaxChars, 4000)
+        const missing = enabled.filter(n => !jwNames.has(n))
+        if (missing.length > maxSkills) logger?.info?.(`[dsh-jiuwen] ${missing.length - maxSkills} host skill(s) beyond skillSyncMax=${maxSkills} not forwarded`)
+        for (const name of missing.slice(0, maxSkills)) {
           try {
             const full = typeof reg.get === 'function' ? await reg.get(name, opts) : undefined
             const content = full?.content
             if (typeof content === 'string' && content.trim()) {
               const description = typeof full?.description === 'string' && full.description.trim() !== content.trim() ? skillDescription(full, content) : ''
-              unknown.push({ name, content: content.slice(0, 4000), ...(description ? { description } : {}) })
+              unknown.push({ name, content: truncateSkillBody(content, maxChars), ...(description ? { description } : {}) })
             }
           } catch (e) { soft(logger, 'skills.get', e) }
         }
@@ -638,6 +643,16 @@ export function installHostSync(deps) {
 
 export { redactSecrets } from './redact.js'
 import { redactSecrets } from './redact.js'
+
+const posInt = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : d }
+
+/** Cap a host skill body at `max` chars with an explicit marker so the model knows it is partial. */
+export function truncateSkillBody(content, max = 4000) {
+  const s = String(content ?? '')
+  if (!(max > 0) || s.length <= max) return s
+  const marker = `\n…[host skill truncated by dsh-jiuwen adapter: capped at ${max} of ${s.length} chars]`
+  return `${s.slice(0, Math.max(0, max - marker.length))}${marker}`
+}
 
 /** One-line description of a host skill: registry field, else frontmatter `description:`, else first prose line. */
 export function skillDescription(full, content) {

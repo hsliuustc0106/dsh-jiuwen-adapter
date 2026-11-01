@@ -115,3 +115,12 @@ test('splitSections ignores # lines inside fenced code blocks', () => {
   const unclosed = '# A\n```\n# inside\n'
   assert.deepEqual(splitSections(unclosed).map(s => s.head), ['# A'])
 })
+
+test('truncateSkillBody: marker + configurable limit', async () => {
+  const { truncateSkillBody } = await import('../src/host-sync.js')
+  assert.equal(truncateSkillBody('short', 100), 'short')
+  const t = truncateSkillBody('x'.repeat(500), 200)
+  assert.equal(t.length, 200)
+  assert.match(t, /truncated by dsh-jiuwen adapter: capped at 200 of 500 chars\]$/)
+  assert.equal(resolveConfig({ skillBodyMaxChars: 9000, skillSyncMax: 5 }, { env: {} }).skillBodyMaxChars, 9000)
+})
