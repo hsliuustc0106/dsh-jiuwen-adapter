@@ -170,7 +170,8 @@ export interface JiuwenAdapterConfig {
   toolAllowlistExtra?: string[]
   /** Also pass through host tools whose schema sets `passthrough: true` / `meta.jiuwenPassthrough` (default true). */
   toolHostDeclared?: boolean
-  toolApproval?: string
+  /** 'host' (default): dsh's own tool pipeline decides | 'dsh': legacy per-call ctx.approval gate | 'none'. */
+  toolApproval?: 'host' | 'dsh' | 'none' | string
   toolApprovalExempt?: string[]
   toolCallTimeoutMs?: number
   toolPassthrough?: boolean

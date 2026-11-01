@@ -11,6 +11,9 @@ All notable changes to this project are documented here. The format follows
 - **Incremental system prompt updates** (`injectSystemUpdate: diff`, **default**; `full` still available): section-level delta on change when safe (preamble/reorder/size gates → full); section hashes persisted on the mapping (no prompt text stored).
 - **Host system section filter** (`hostSystemSectionsAllow` / `hostSystemSectionsDeny`): optional regex filters by markdown heading when building `[System instructions from host]`, applied before hash/diff. Empty allow + empty deny = all sections; no built-in denylist.
 - **`sessionOverrides`**: per-session-id glob knobs (model / chat mode / template), empty by default.
+- **`toolApproval: host` (new default)**: Jiuwen passthrough calls run through dsh's own tool pipeline (`tools.execute`: pre-execute policy, sandbox guards, approval policy, execute wrappers incl. per-tool timeout, post-execute, finalizers, `tools/result`), so approval policy `never` no longer denies calls dsh itself would run (`dsh denied write (rejected)`). `dsh` (legacy per-call gate) and `none` stay as explicit options; falls back to `dsh` without a tools runtime `execute()` / live agent.
+- Plan review and SwarmFlow human turns are asked via `ctx.userQuestions` (like dsh's `exit_plan_mode`), not `ctx.approval` (which rejects everything under `never`); tool permission asks still use `ctx.approval`.
+- `prepare([])` keeps admitted schemas; Jiuwen MCP `timeout_s` covers approval wait + run; passthrough calls are cancelled when the proxy connection drops.
 
 ## Unreleased
 

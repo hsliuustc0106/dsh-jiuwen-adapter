@@ -2,7 +2,16 @@
  * Host-answered Jiuwen interactions.
  *
  *  - chat.ask_user_question (source ask_user_interrupt / plain)  → ctx.userQuestions.ask()  (dsh-user-questions)
- *  - permission_interrupt / confirm_interrupt / plan.approval_required → ctx.approval.request() (dsh-user-approval)
+ *  - permission_interrupt / tool confirm_interrupt              → ctx.approval.request() (dsh-user-approval)
+ *  - plan.approval_required / plan confirm_interrupt             → ctx.userQuestions plan review (like dsh's own
+ *    exit_plan_mode), ctx.approval only when the host has no user-questions channel
+ *  - swarmflow_human (a person's turn in a SwarmFlow run)         → ctx.userQuestions, ctx.approval as fallback
+ *
+ * Why plan review / SwarmFlow human go to user-questions: dsh asks *questions* through
+ * user-questions regardless of the approval policy; only tool permission asks go through
+ * ctx.approval, which resolves `rejected` immediately under policy `never`. Routing a plan review
+ * through ctx.approval made every Jiuwen plan / SwarmFlow review fail under the `auto` preset while
+ * the native plan review still asks.
  *
  * Returns `{ kind, outcome, answers, note }` in Jiuwen's answer shape
  * (`[{ selected_options: [...], custom_input, card_id? }]`), or null to keep the legacy
@@ -11,6 +20,36 @@
  */
 
 const APPROVAL_SOURCES = new Set(['permission_interrupt', 'confirm_interrupt'])
+const APPROVE_LABEL = 'Approve'
+const KEEP_PLANNING_LABEL = 'Keep planning'
+const REJECT_LABEL = 'Reject'
+
+/**
+ * One host question card (dsh-user-questions), bounded by `ms` and the turn signal.
+ * @returns {Promise<{ outcome: 'answered', selected: string[], custom: string } | { outcome: string }>}
+ *   outcome 'answered' | 'timeout' | 'cancelled' | 'unavailable'; never throws.
+ */
+async function askCard(userQuestions, agent, item, ms, signal) {
+  try {
+    const ask = Promise.resolve(userQuestions.ask({ questions: [item], ...(agent ? { agent } : {}), ...(signal ? { signal } : {}) }))
+    ask.catch(() => {})
+    const res = await withTimeout(ask, ms, null, signal)
+    if (signal?.aborted) return { outcome: 'cancelled' }
+    if (!res || !Array.isArray(res.answers)) return { outcome: 'timeout' }
+    const a = res.answers.find(x => x?.id === item.id) || res.answers[0] || {}
+    const custom = typeof a.custom === 'string' ? a.custom : (typeof a.text === 'string' ? a.text : '')
+    return { outcome: 'answered', selected: (a.selected || []).map(String), custom }
+  } catch (error) {
+    return { outcome: error?.code === 'ASK_CANCELLED' ? 'cancelled' : 'unavailable' }
+  }
+}
+
+async function askApproval(approval, agent, toolName, reason, ms, signal) {
+  if (approval?.request && agent) {
+    return withTimeout(Promise.resolve(approval.request({ agent, toolName, reason, signal })).catch(() => 'unavailable'), ms, 'timeout', signal)
+  }
+  return approval?.request ? 'unavailable' : 'no-ui'
+}
 const ALLOW_RE = /^(allow_once|allow|approve|approved|yes|execute|implement|accept)$/i
 const REJECT_RE = /^(reject|deny|denied|no|cancel|skip)$/i
 
@@ -47,23 +86,36 @@ export function createInteractor(deps) {
     try { agent = agents?.get?.(dshSessionId) } catch { agent = undefined }
 
     if (payload?.source === 'swarmflow_human' && payload?.swarmflow_meta?.correlation_id) {
-      // SwarmFlow human turn → dsh approval (allowed-once = "approved"); the transport replies with
-      // chat.swarmflow_reply. Never fails open: no UI / no agent / timeout → rejected.
+      // SwarmFlow human turn: a question for the person (dsh-user-questions), replied with
+      // chat.swarmflow_reply by the transport. ctx.approval (allowed-once = "approved") only when the
+      // host has no user-questions channel. Never fails open: no UI / no agent / timeout → rejected.
       const q = questions[0] || {}
       const meta = payload.swarmflow_meta
+      const who = meta.agent_name || meta.agent_id || 'human'
       const reason = String(q.question || 'SwarmFlow is waiting for your input').slice(0, 2000)
       let outcome = 'unavailable'
-      if (approval?.request && agent) {
-        outcome = await withTimeout(
-          Promise.resolve(approval.request({ agent, toolName: `swarmflow:${meta.agent_name || meta.agent_id || 'human'}`, reason, signal })).catch(() => 'unavailable'),
-          cfg.approvalTimeoutMs, 'timeout', signal)
-      } else if (!approval?.request) outcome = 'no-ui'
-      const allow = outcome === 'allowed-once'
-      const answerText = allow ? 'approved' : `rejected (${outcome})`
+      let answerText
+      if (userQuestions?.ask) {
+        const own = cardOptions(q.options).map(o => typeof o === 'string' ? { label: o } : { label: String(o.label || o.value || '?'), ...(o.description ? { description: String(o.description) } : {}) })
+        const item = { id: 'swarmflow-human', header: String(q.header || `SwarmFlow · ${who}`).slice(0, 60), question: reason,
+          options: own.length ? own : [{ label: APPROVE_LABEL, description: 'Approve and let the run continue' }, { label: REJECT_LABEL, description: 'Reject; type feedback instead to send it as the reply' }] }
+        const r = await askCard(userQuestions, agent, item, cfg.approvalTimeoutMs, signal)
+        outcome = r.outcome
+        if (r.outcome === 'answered') {
+          if (r.custom) answerText = r.custom
+          else if (!own.length && r.selected.length === 1 && r.selected[0] === APPROVE_LABEL) { answerText = 'approved'; outcome = 'allowed-once' }
+          else if (!own.length) { answerText = 'rejected (user)'; outcome = 'rejected' }
+          else answerText = r.selected.join(', ') || 'rejected (no answer)'
+        }
+        if (r.outcome === 'unavailable') outcome = await askApproval(approval, agent, `swarmflow:${who}`, reason, cfg.approvalTimeoutMs, signal)
+      } else {
+        outcome = await askApproval(approval, agent, `swarmflow:${who}`, reason, cfg.approvalTimeoutMs, signal)
+      }
+      if (answerText === undefined) answerText = outcome === 'allowed-once' ? 'approved' : `rejected (${outcome})`
       return {
         kind: 'swarmflow', outcome, answerText,
         answers: [{ selected_options: [], custom_input: answerText }],
-        note: `• swarmflow ${meta.agent_name || meta.agent_id || 'human'}: ${answerText}`,
+        note: `• swarmflow ${who}: ${answerText}`,
       }
     }
 
@@ -71,17 +123,30 @@ export function createInteractor(deps) {
       const q = questions[0] || payload || {}
       const toolName = String(q.tool_name || payload?.tool_name || (eventType === 'plan.approval_required' || payload?.source === 'confirm_interrupt' ? 'exit_plan_mode' : 'jiuwen-tool'))
       const reason = String(q.question || q.message || payload?.message || payload?.content || `Jiuwen requests permission: ${toolName}`).slice(0, 2000)
+      const isPlan = eventType === 'plan.approval_required' || (payload?.source === 'confirm_interrupt' && toolName === 'exit_plan_mode')
       let outcome = 'unavailable'
-      if (approval?.request && agent) {
-        outcome = await withTimeout(
-          Promise.resolve(approval.request({ agent, toolName, reason, signal })).catch(() => 'unavailable'),
-          cfg.approvalTimeoutMs, 'timeout', signal)
-      } else if (!approval?.request) outcome = 'no-ui'
+      let feedback = ''
+      let viaQuestions = false
+      if (isPlan && userQuestions?.ask) {
+        // Plan review, as dsh's own exit_plan_mode does it: a question card (not a permission ask).
+        const plan = String(payload?.plan || q.plan || q.detail || payload?.content || '').slice(0, 20_000)
+        const item = { id: 'plan-review', header: 'Plan review', question: reason || 'Approve this plan and leave plan mode?',
+          ...(plan && plan !== reason ? { detail: plan } : {}),
+          options: [{ label: APPROVE_LABEL, description: 'Carry out the plan' }, { label: KEEP_PLANNING_LABEL, description: 'Stay in plan mode; typed feedback goes back to Jiuwen' }] }
+        const r = await askCard(userQuestions, agent, item, cfg.approvalTimeoutMs, signal)
+        if (r.outcome === 'answered') {
+          viaQuestions = true
+          const approved = r.selected.length === 1 && r.selected[0] === APPROVE_LABEL && !r.custom
+          outcome = approved ? 'allowed-once' : 'rejected'
+          feedback = approved ? '' : r.custom
+        } else if (r.outcome !== 'unavailable') { viaQuestions = true; outcome = r.outcome }
+      }
+      if (!viaQuestions) outcome = await askApproval(approval, agent, toolName, reason, cfg.approvalTimeoutMs, signal)
       const allow = outcome === 'allowed-once'
       return {
         kind: 'approval', outcome,
-        answers: approvalAnswers(questions.length ? questions : [payload || {}], allow, payload?.plan_actions),
-        note: `• approval ${toolName}: ${allow ? 'allowed once' : 'denied'} (${outcome})`,
+        answers: approvalAnswers(questions.length ? questions : [payload || {}], allow, payload?.plan_actions, feedback),
+        note: `• ${isPlan ? 'plan review' : 'approval'} ${toolName}: ${allow ? (isPlan ? 'approved' : 'allowed once') : 'denied'} (${outcome})`,
       }
     }
 
@@ -136,14 +201,14 @@ export function createInteractor(deps) {
   return interact
 }
 
-export function approvalAnswers(questions, allow, planActions) {
+export function approvalAnswers(questions, allow, planActions, feedback) {
   return questions.map((q) => {
     const opts = [...(Array.isArray(q.options) ? q.options : []), ...(Array.isArray(planActions) ? planActions : [])]
       .map(o => typeof o === 'string' ? { value: o, label: o } : o).filter(Boolean)
     const re = allow ? ALLOW_RE : REJECT_RE
     const hit = opts.find(o => re.test(String(o.value ?? ''))) || opts.find(o => re.test(String(o.label ?? '')))
     const selected = String(hit?.value ?? hit?.label ?? (allow ? 'allow_once' : 'reject'))
-    return { selected_options: [selected], custom_input: allow ? '' : 'Denied by dsh host', ...(q.card_id ? { card_id: q.card_id } : {}) }
+    return { selected_options: [selected], custom_input: allow ? '' : (feedback || 'Denied by dsh host'), ...(q.card_id ? { card_id: q.card_id } : {}) }
   })
 }
 

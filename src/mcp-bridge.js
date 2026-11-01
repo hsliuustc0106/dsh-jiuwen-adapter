@@ -7,8 +7,10 @@
  *
  * Serves allowlisted dsh tool schemas on a private 127.0.0.1 HTTP endpoint (path
  * /mcp/<sessionKey>, random bearer token) and executes tools/call inside dsh via
- * ToolService.get(name, agent). Each call is gated by dsh approval unless
- * toolApproval: 'none'.
+ * dsh's own tool execution pipeline (ToolRuntime.execute: pre-execute policy, sandbox guards,
+ * approval policy, execute wrappers, post-execute, finalizers) when toolApproval: 'host' (default),
+ * so a Jiuwen-issued call behaves like a native dsh call. 'dsh' keeps the legacy per-call
+ * ctx.approval gate + direct def.execute; 'none' runs the definition directly.
  *
  * Jiuwen never connects to that endpoint directly. One stable stdio MCP proxy
  * (bin/jiuwen-mcp-proxy.mjs) is registered per dsh session under a unique name
@@ -123,7 +125,28 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     return e
   }
 
-  async function callTool(sessionId, name, args) {
+  /**
+   * Pick the dsh ToolRuntime that runs a passthrough call through dsh's own execution pipeline
+   * (tools/pre-execute policy + guards + ask→ctx.approval, tools/execute wrappers such as the
+   * per-tool timeout policy, tools/post-execute, content finalizers, tools/result observers).
+   * Only a runtime with `execute(exec)` and a live calling agent qualifies; anything else falls
+   * back to the legacy per-call gate (see `toolApproval`).
+   */
+  function hostRuntime(tools, agent, name) {
+    if (!agent) return undefined
+    const candidates = [tools, agent.ctx?.tools].filter((r) => r && typeof r.execute === 'function')
+    for (const r of candidates) {
+      try { if (typeof r.get !== 'function' || r.get(name, agent)) return r } catch { /* try next */ }
+    }
+    // No runtime sees the tool for this agent: still let the root runtime answer (it reports UNKNOWN_TOOL
+    // exactly like a native call would) instead of resolving an unscoped definition.
+    return candidates[0]
+  }
+
+  /** Total budget for one passthrough call (approval wait + execution), shared with the Jiuwen registration. */
+  const callBudgetMs = (c) => Number(c.toolCallTimeoutMs) + (c.toolApproval === 'none' ? 0 : Math.max(0, Number(c.approvalTimeoutMs) || 0))
+
+  async function callTool(sessionId, name, args, callerSignal) {
     const c = cfg()
     const e = sessions.get(sessionId)
     // e.schemas only holds tools admitted at prepare() (allowlist or host-declared).
@@ -133,17 +156,42 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     const { tools, approval, agents } = services()
     let agent
     try { agent = agents?.get?.(sessionId) } catch { agent = undefined }
+    const mode = c.toolApproval || 'host'
+    const finish = (text) => (c.skillLoaderTool && name === c.skillLoaderTool && c.redactSkillOutput !== false ? redactSecrets(text) : text)
+
+    const runtime = mode === 'host' ? hostRuntime(tools, agent, name) : undefined
+    if (runtime) {
+      // 'host': dsh decides, exactly as for a native call. Approval policy `never` + a pre-execute
+      // `allow` runs the tool; a real `ask` goes to ctx.approval (and `never` rejects it, as natively).
+      e.lastUsed = Date.now(); e.inflight++
+      const ac = new AbortController()
+      const onCaller = () => ac.abort()
+      callerSignal?.addEventListener?.('abort', onCaller, { once: true })
+      const t = setTimeout(() => ac.abort(), callBudgetMs(c))
+      try {
+        const result = await runtime.execute({ callId: `jiuwen-${randomUUID()}`, name, arguments: args ?? {}, agent, signal: ac.signal })
+        return { isError: Boolean(result?.isError), text: finish(toText(result)) }
+      } catch (error) {
+        return { isError: true, text: `dsh tool ${name} failed: ${error?.message || error}` }
+      } finally {
+        clearTimeout(t); callerSignal?.removeEventListener?.('abort', onCaller)
+        e.inflight--; e.lastUsed = Date.now()
+      }
+    }
+
+    // Legacy path: 'dsh' (explicit), 'host' without a usable runtime, or 'none'.
+    if (mode === 'host') logger?.debug?.(`[dsh-jiuwen] toolApproval=host: no dsh tools runtime/agent for ${name}; using the per-call approval gate`)
     let def
     try { def = agent ? tools?.get?.(name, agent) ?? agent.ctx?.tools?.get?.(name, agent) : undefined } catch { def = undefined }
     if (!def?.execute) def = tools?.get?.(name)
     if (!def?.execute) return { isError: true, text: `dsh tool ${name} not found (session=${sessionId})` }
-    if (c.toolApproval !== 'none' && !matchesAllowlist(name, c.toolApprovalExempt || [])) {
+    if (mode !== 'none' && !matchesAllowlist(name, c.toolApprovalExempt || [])) {
       let outcome = 'unavailable'
       if (approval?.request && agent) {
         let timer
         try {
           outcome = await Promise.race([
-            approval.request({ agent, toolName: name, reason: `JiuwenSwarm wants to run dsh tool ${name}` }),
+            approval.request({ agent, toolName: name, reason: `JiuwenSwarm wants to run dsh tool ${name}`, ...(callerSignal ? { signal: callerSignal } : {}) }),
             new Promise(r => { timer = setTimeout(() => r('timeout'), c.approvalTimeoutMs); timer.unref?.() }),
           ])
         } catch { outcome = 'unavailable' } finally { clearTimeout(timer) }
@@ -152,21 +200,22 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     }
     e.lastUsed = Date.now(); e.inflight++
     const ac = new AbortController()
+    const onCaller = () => ac.abort()
+    callerSignal?.addEventListener?.('abort', onCaller, { once: true })
     const t = setTimeout(() => ac.abort(), c.toolCallTimeoutMs)
     try {
       const result = await def.execute(args ?? {}, {
         callId: `jiuwen-${randomUUID()}`, name, arguments: args ?? {}, agent, signal: ac.signal,
         deferContext() {}, concludeTurn() {},
       })
-      const text = toText(result)
       // The skill loader returns host skill bodies (prompt text, like the index-mode injection): mask secrets.
-      return { isError: false, text: c.skillLoaderTool && name === c.skillLoaderTool && c.redactSkillOutput !== false ? redactSecrets(text) : text }
+      return { isError: false, text: finish(toText(result)) }
     } catch (error) {
       return { isError: true, text: `dsh tool ${name} failed: ${error?.message || error}` }
-    } finally { clearTimeout(t); e.inflight--; e.lastUsed = Date.now() }
+    } finally { clearTimeout(t); callerSignal?.removeEventListener?.('abort', onCaller); e.inflight--; e.lastUsed = Date.now() }
   }
 
-  async function handle(sessionId, msg) {
+  async function handle(sessionId, msg, signal) {
     const e = sessions.get(sessionId)
     const { id, method, params } = msg || {}
     const ok = (result) => ({ jsonrpc: '2.0', id, result })
@@ -180,7 +229,7 @@ export function createMcpBridge({ config, services, rpc, logger }) {
       return ok({ tools: list })
     }
     if (method === 'tools/call') {
-      const r = await callTool(sessionId, String(params?.name || ''), params?.arguments)
+      const r = await callTool(sessionId, String(params?.name || ''), params?.arguments, signal)
       return ok({ content: [{ type: 'text', text: r.text.slice(0, 200_000) }], isError: r.isError })
     }
     if (id === undefined) return null
@@ -213,7 +262,9 @@ export function createMcpBridge({ config, services, rpc, logger }) {
 
   async function ensureRegistered(e, changed) {
     const c = cfg()
-    const reg = proxyRegistration(e.name, e.stateDir, c.toolCallTimeoutMs)
+    // Jiuwen's MCP call timeout covers the whole call (approval wait + run) plus a margin, so the
+    // adapter's own deadline answers first and Jiuwen never abandons a call that is still running.
+    const reg = proxyRegistration(e.name, e.stateDir, callBudgetMs(c) + 5_000)
     const record = readJson(jiuwenState(), {})?.mcp?.[e.name]
     const timeoutMs = c.mcpRpcTimeoutMs ?? 30_000
     if (isProxyConnected(record, reg)) {
@@ -353,12 +404,16 @@ export function createMcpBridge({ config, services, rpc, logger }) {
       if (!sessionId) { res.writeHead(404).end(); return }
       let body = ''
       req.on('data', (d) => { body += d; if (body.length > 10_000_000) req.destroy() })
+      // Caller gone (proxy killed / Jiuwen cancelled) before we answered: cancel the dsh call.
+      const ac = new AbortController()
+      res.on('close', () => { if (!res.writableEnded) ac.abort() })
       req.on('end', async () => {
         let msg
         try { msg = JSON.parse(body) } catch { res.writeHead(400).end(); return }
         const out = Array.isArray(msg)
-          ? (await Promise.all(msg.map(x => handle(sessionId, x)))).filter(Boolean)
-          : await handle(sessionId, msg)
+          ? (await Promise.all(msg.map(x => handle(sessionId, x, ac.signal)))).filter(Boolean)
+          : await handle(sessionId, msg, ac.signal)
+        if (res.destroyed) return
         if (!out || (Array.isArray(out) && !out.length)) { res.writeHead(202).end(); return }
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out))
       })
@@ -384,8 +439,10 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     async prepare(tools, sessionId) {
       const e = ensureEntry(sessionId)
       e.lastUsed = Date.now()
-      e.schemas.clear()
       const c0 = cfg()
+      // An empty tool list (e.g. host-sync's "make sure the proxy exists" call) is not a new turn's
+      // tool set: keep the admitted schemas, or tools/call for them would fail as "not exposed".
+      if (tools?.length || !e.schemas.size) e.schemas.clear()
       for (const t of tools || []) if (t?.name && (matchesAllowlist(t.name, c0.toolAllowlist) || (c0.toolHostDeclared !== false && hostDeclaredPassthrough(t)))) e.schemas.set(t.name, t)
       // hostSkillInject:index must keep skillLoaderTool reachable even under a restrictive allowlist.
       if (c0.hostSkillInject === 'index') {

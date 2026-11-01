@@ -12,12 +12,14 @@ Verified live on npm `@deepseek-ai/dsh@0.2.1-rc.2` + local JiuwenSwarm Gateway `
 - Duplicate cards for an already-answered `request_id` are ignored.
 
 
-## 2. Permission / plan approval → dsh user-approval (`ctx.approval`)
+## 2. Permission asks → dsh user-approval (`ctx.approval`); plan review / SwarmFlow human → dsh user-questions
 
-- Routed to `ctx.approval.request({ agent, toolName, reason, signal })` (`@deepseek-ai/dsh-user-approval`, i.e. the dsh approval card / `approval/request` waterfall / ACP permission):
+- Tool permission asks are routed to `ctx.approval.request({ agent, toolName, reason, signal })` (`@deepseek-ai/dsh-user-approval`, i.e. the dsh approval card / `approval/request` waterfall / ACP permission):
   - `chat.ask_user_question` with `source: permission_interrupt` (Jiuwen tool permission card; `card_id` is echoed back),
-  - `source: confirm_interrupt` (plan approval, `exit_plan_mode`),
-  - `plan.approval_required`.
+  - `source: confirm_interrupt` naming a tool other than `exit_plan_mode`.
+  Under dsh approval policy `never` these resolve `rejected` immediately — the same as a native dsh tool whose pre-execute policy asks.
+- Plan review (`plan.approval_required`, and `confirm_interrupt` for `exit_plan_mode`) is asked like dsh's own `exit_plan_mode`: a `ctx.userQuestions` card (*Approve* / *Keep planning*, plan text as detail, typed text = feedback). dsh asks questions regardless of the approval policy, so plan review keeps working under the `auto` preset (`never`). Without a user-questions channel (or when it has no answerer) it falls back to `ctx.approval` as before.
+- SwarmFlow human turns (`source: swarmflow_human`) are a `ctx.userQuestions` card too (*Approve* / *Reject*, or the step's own options; typed text is sent verbatim with `chat.swarmflow_reply`), with the `ctx.approval` fallback.
 - Decision → Jiuwen option: `allowed-once` → option whose value/label is `allow_once`/`approve`/…; anything else → `reject`/`deny`/…, then resumed with `chat.send {request_id, answers, source}`.
 - **Safe default = deny**: no `ctx.approval`, no live agent, `rejected`/`cancelled`/`unavailable`, error, abort or `approvalTimeoutMs` (default 300000) → reject. Approvals never fail open. dsh approval policy `never` (auto-approve) is honoured because it is dsh's own decision.
 - Live (dsh 0.2.1-rc.2, `JIUWEN_CHAT_MODE=code.plan`): rejected → Jiuwen did not execute the plan (file not created); `allowed-once` → plan executed (`/tmp/jwplan.txt` = `hi`).
@@ -27,7 +29,7 @@ Verified live on npm `@deepseek-ai/dsh@0.2.1-rc.2` + local JiuwenSwarm Gateway `
 
 Default stays **`toolPassthrough: off`**: dsh tool schemas are stripped and Jiuwen only uses its own tools (no double execution, no DSH agent-loop re-entry).
 
-With `toolPassthrough: mcp` each dsh process serves the allowlisted tool schemas of its turns (`GenerateOptions.tools`: built-ins, other plugins' tools, `dsh-mcp-client` tools) on a private `127.0.0.1:<random>` endpoint with a random bearer token. Jiuwen does **not** connect to that endpoint: it talks to one stable stdio MCP server, `bin/jiuwen-mcp-proxy.mjs`, registered once per Jiuwen backend under `mcpServerName` (`mcp.register_custom` transport `stdio` + `mcp.connect`) and owned by Jiuwen. Each dsh process drops `ep-<pid>.json` (0600) into the shared state dir (`mcpStateDir`, default `~/.cache/dsh-jiuwen/mcp/<mcpServerName>/`) and merges its schemas into `schemas.json`; the proxy forwards `tools/call` to the newest live process that serves the tool and answers `isError` "dsh is not running" otherwise. The turn enables it via `chat.send` param `mcp: [name]`; Jiuwen calls `mcp_<name>_<tool>`; dsh executes `ctx.tools.get(tool).execute()` in-process.
+With `toolPassthrough: mcp` each dsh process serves the allowlisted tool schemas of its turns (`GenerateOptions.tools`: built-ins, other plugins' tools, `dsh-mcp-client` tools) on a private `127.0.0.1:<random>` endpoint with a random bearer token. Jiuwen does **not** connect to that endpoint: it talks to one stable stdio MCP server, `bin/jiuwen-mcp-proxy.mjs`, registered once per Jiuwen backend under `mcpServerName` (`mcp.register_custom` transport `stdio` + `mcp.connect`) and owned by Jiuwen. Each dsh process drops `ep-<pid>.json` (0600) into the shared state dir (`mcpStateDir`, default `~/.cache/dsh-jiuwen/mcp/<mcpServerName>/`) and merges its schemas into `schemas.json`; the proxy forwards `tools/call` to the newest live process that serves the tool and answers `isError` "dsh is not running" otherwise. The turn enables it via `chat.send` param `mcp: [name]`; Jiuwen calls `mcp_<name>_<tool>`; dsh executes the call in-process through its own tool pipeline (`toolApproval: host`, default: `ctx.tools.execute({ name, arguments, agent, callId, signal })` — pre-execute policy, sandbox guards, approval policy, execute wrappers incl. the per-tool timeout, post-execute, finalizers), or with the legacy per-call gate + `ctx.tools.get(tool).execute()` (`toolApproval: dsh` / fallback).
 
 Why the proxy: JiuwenSwarm's worker spins at 100 % CPU forever when it closes a streamable-http MCP client whose server already exited ([known-issues.md](./known-issues.md#1-jiuwen-worker-spins-at-100-cpu-after-an-mcp-server-disappears)). dsh processes are short-lived and may be killed (`kill -9`), so per-process register/remove — the first implementation — reliably wedged the backend. Now:
 - no `mcp.disconnect` / `mcp.delete_custom` per process; dispose / exit only removes `ep-<pid>.json` (a stale file of a killed process is ignored by pid liveness);
@@ -39,7 +41,7 @@ Why the proxy: JiuwenSwarm's worker spins at 100 % CPU forever when it closes a 
   config:
     toolPassthrough: mcp             # JIUWEN_TOOL_PASSTHROUGH
     toolAllowlist: [web_fetch, working_directory, 'my_plugin_*']   # JIUWEN_TOOL_ALLOWLIST (comma); '*' = all — empty = none
-    toolApproval: dsh                # every call needs ctx.approval allowed-once (deny on no UI/timeout); 'none' to skip
+    toolApproval: host               # default: dsh's own tool pipeline decides (pre-execute/sandbox/approval policy); 'dsh' = legacy per-call ctx.approval gate; 'none' = no approval
     toolCallTimeoutMs: 120000
     mcpServerName: dsh-tools
     # mcpStateDir: ~/.cache/dsh-jiuwen/mcp/dsh-tools   # JIUWEN_MCP_STATE_DIR
