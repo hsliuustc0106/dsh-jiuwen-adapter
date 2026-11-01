@@ -32,7 +32,7 @@ dsh has no plugin literally named "memory". Its memory and recall layer is three
 | dsh-experimental-session-search (+ session-query-sqlite, tool-session-query; opt-in) | unchanged | the `session_*` tools reach Jiuwen as `mcp_dsh-tools_session_*` and return dsh's session index | works (after the fix below) |
 
 - **Jiuwen's own memory:** no conflict. Jiuwen keeps its `coding_memory_*` tools and its history. dsh tools are prefixed, and dsh context is sent once per turn, never duplicated.
-- **Fix:** the passthrough asked for dsh approval on every call. dsh never asks for the read-only session-query tools, so a Jiuwen session would hang until approval timed out (300 s). These tools are now in `toolApprovalExempt` (see the configuration docs). All other tools are still gated.
+- **Fix:** the passthrough asked for dsh approval on every call. dsh never asks for the read-only session-query tools (or goal CRUD: `get_goal` / `update_goal` / `create_goal`), so a Jiuwen session would hang until approval timed out (300 s) — and with `permissions.approval: never` the gate returns `rejected` immediately (`dsh denied get_goal (rejected)`), leaving goals stuck paused. These tools are now in `toolApprovalExempt` (see the configuration docs). All other tools are still gated.
 - **Limit:** Jiuwen-side memory is not mirrored into dsh's session index. `session_search` sees the dsh transcripts of Jiuwen sessions, not Jiuwen's internal memory.
 
 **Gaps:** opt-in and experimental plugins outside `dsh-base`/`dsh-web-app` were not loaded: mcp-client, time-context, session-search, ralph, terminal, worktree, auto-review. dsh has no session delete, so the Jiuwen session is deleted only after dsh has dropped it.

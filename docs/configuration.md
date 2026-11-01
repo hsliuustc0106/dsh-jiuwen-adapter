@@ -58,7 +58,7 @@ Precedence: **environment variable > Cordis plugin config > default** (`provider
 | `toolAllowlistExtra` | `JIUWEN_TOOL_ALLOWLIST_EXTRA` (comma) | `[]` | With a restricted `toolAllowlist`: extra names/globs to add (e.g. `orchestrator_*`, `web_*`) |
 | `toolHostDeclared` | `JIUWEN_TOOL_HOST_DECLARED` | `true` | With a restricted `toolAllowlist`: also pass host tools whose schema declares `passthrough: true` (or `meta.jiuwenPassthrough: true`) |
 | `toolApproval` | `JIUWEN_TOOL_APPROVAL` | `dsh` | Gate each passthrough call with `ctx.approval` (deny when unavailable); `none` |
-| `toolApprovalExempt` | `JIUWEN_TOOL_APPROVAL_EXEMPT` | session-query tools | Passthrough tools that skip the gate (dsh never asks for them): `session_search`, `session_event_search`, `session_event_read`, `session_trace`, `session_event_trace`. `*` suffix = prefix |
+| `toolApprovalExempt` | `JIUWEN_TOOL_APPROVAL_EXEMPT` | session-query + goal tools | Passthrough tools that skip the gate (dsh never asks for them): `session_search`, `session_event_search`, `session_event_read`, `session_trace`, `session_event_trace`, `get_goal`, `update_goal`, `create_goal`. `*` suffix = prefix |
 | `toolCallTimeoutMs` | `JIUWEN_TOOL_CALL_TIMEOUT_MS` | `120000` | Abort a passthrough dsh tool call |
 | `mcpServerName` | `JIUWEN_MCP_SERVER_NAME` | `dsh-tools` | Name of the stable stdio MCP proxy registered once in Jiuwen (experimental) |
 | `mcpStateDir` | `JIUWEN_MCP_STATE_DIR` | `~/.cache/dsh-jiuwen/mcp/<name>` | Shared dir: `schemas.json` + `ep-<pid>.json` read by the proxy |
