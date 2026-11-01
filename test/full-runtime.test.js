@@ -37,9 +37,13 @@ const NM = `${process.env.DSH_NM || '/workspace/fb-busyack3/core/dev/harness/nod
 const hasRuntime = ['cordis', 'dsh-agent', 'dsh-agent-loop', 'dsh-llm', 'dsh-session', 'dsh-tools', 'dsh-commands'].every(p => existsSync(`${NM}/${p}/lib/index.js`))
 
 describe('full agent runtime A/B matrix', { skip: !hasRuntime && 'dsh agent runtime packages not found (set DSH_NM)' }, () => {
-  it('every feature identical with and without the adapter (down/after, before, two, mixed)', () => {
+  it('every feature identical with and without the adapter (down/after, before, two, mixed)', async () => {
     let out
+    // --live drives a real Jiuwen (the read-only preset flips its global bash/write/edit levels): snapshot + exact restore.
+    const live = process.env.JIUWEN_LIVE === '1' ? await import('./live/lib.mjs') : null
+    const snap = live && await live.gatewayUp() ? await live.snapshot() : null
     try { out = execFileSync(process.execPath, [`${ROOT}scripts/compat-matrix.mjs`, ...(process.env.JIUWEN_LIVE ? ['--live'] : [])], { encoding: 'utf8', timeout: 700_000, stdio: ['ignore', 'pipe', 'pipe'] }) } catch (e) { out = e.stdout }
+    if (snap) assert.deepEqual(await live.restore(snap), [], 'Jiuwen state restored after the --live matrix')
     const m = JSON.parse(out)
     const bad = m.rows.filter(r => r.slice(1).some(c => c !== 'identical'))
     assert.deepEqual(bad, [], JSON.stringify({ header: m.header, diffs: m.diffs }))
