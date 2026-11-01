@@ -296,3 +296,16 @@ test('proxy ignores the --rev arg', async () => {
   assert.deepEqual(line.result.tools.map(t => t.name), ['x'])
   p.stdin.end()
 })
+
+test('/jiuwen mcp reports this session\'s per-session passthrough server (was: base name, always "not registered")', async () => {
+  const { createJiuwenCommand } = await import('../src/commands.js')
+  const name = sessionMcpName('dsh-tools', 'sess-a')
+  const b = createMcpBridge({ config: () => ({ mcpServerName: 'dsh-tools' }), services: () => ({}), logger: {}, rpc: async (m, p) => {
+    if (m === 'mcp.show' && p.name === name) return { type: 'detail', item: { name, category: 'custom', connection_state: 'connected', tools: [{ name: 'bash' }, { name: 'read' }] } }
+    throw new Error(`SkillHub asset not found: ${p?.name}`)
+  } })
+  const cmd = createJiuwenCommand({ sessions: { ensure: () => ({ jiuwenSessionId: 'j' }) }, gateway: () => ({ mcpList: async () => ({ items: [{ name: 'github', connection_state: 'disconnected' }] }) }), config: () => ({ mcpServerName: 'dsh-tools' }), mcpBridge: b })
+  const out = await cmd.run('sess-a', 'mcp')
+  assert.match(out, new RegExp(`dsh tool passthrough: ${name} \\(custom, connected, 2 tools\\)`), out)
+  assert.equal((await b.verify('sess-a')).registered, true)
+})

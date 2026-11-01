@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows
 ## Unreleased
 
 - Fix (interrupt on busy): a message that arrived while the resend was still waiting out the post-cancel settle made the adapter send the resend and cancel it at once; Jiuwen dropped that query unrecorded, so the earlier message was lost. The resend is now not sent; its text is carried into the next resend (one note, `N new messages`). Found by the live plain-dsh busy phase (`PLAIN_DSH_ONLY=busy`).
+- Fix: `/jiuwen mcp` (and `jiuwenAdapter.mcpVerify(sessionId)`) checked the base server name `dsh-tools`, which per-session registration never creates, so it always said "not registered". It now reports the session's `dsh-tools-<sha16>` server. Live `compat-runtime --sync2` updated (per-session name; `injectSystem=full` forwards the whole host prompt by design).
 - Tests: `full-runtime.test.js` with `JIUWEN_LIVE=1` + `DSH_NM` (`compat-matrix --live`) left Jiuwen's global bash/write/edit at `deny`; it now snapshots and restores Jiuwen state.
 - Fix: MCP passthrough tools added or changed after Jiuwen started are now found by Jiuwen `tool_search`. The registration carries a schema revision, so Jiuwen spawns a fresh proxy instead of reusing its cached one.
 - Fix: the dsh Auto preset (auto-review) now maps to Jiuwen `ask`. Before, Jiuwen stayed at the previous level, e.g. deny after read-only.

@@ -176,7 +176,7 @@ export function apply(ctx, config = {}) {
     sessions,
     bridge,
     /** Verify the dsh-tools passthrough registration on the Gateway (mcp.show; never throws). */
-    mcpVerify: () => mcpBridge.verify(),
+    mcpVerify: (sessionId) => mcpBridge.verify(sessionId),
     config: readConfig,
     provider: cfg.provider,
     /** Subscribe to structured Jiuwen events ({type, name, ...}); returns unsubscribe. */

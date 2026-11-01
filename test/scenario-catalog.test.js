@@ -56,6 +56,7 @@ export const SCENARIOS = [
   ['interrupt-on-busy: a message during the resend\'s post-cancel settle is carried, not lost (fix)', 'busy-interrupt', 'post-cancel settle → resend not sent'],
   ['interrupt-on-busy in real plain dsh profiles (non-jiuwen unchanged, jiuwen coalesced resend), both load orders', 'live-plain-dsh', 'busyChecks'],
   ['mcp-client tool name in live ext phase: per-session dsh-tools-<sha16> server', 'live-plain-dsh', 'mcp_dsh-tools(-[0-9a-f]{16})?_mcp__echo__echo'],
+  ['/jiuwen mcp + mcpVerify(sessionId) report the per-session passthrough server (fix)', 'mcp-bridge', "/jiuwen mcp reports this session"],
   ['live /jiuwen command pass (rename, pause/resume, goal, workflows, history, btw, recap, supplement, skill-toggle, plan-status, compact, fork, archive, delete)', 'live', 'live /jiuwen commands'],
 ]
 
