@@ -1,8 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { applySkillBodyInjection, redactSecrets, skillDescription, SKILL_INDEX_OPEN, SKILL_BODY_OPEN } from '../src/host-sync.js'
-import { applySystemInjection, splitSections, systemDelta, sectionHashes, applyCoreToolsInjection, SYSTEM_PARTIAL, SYSTEM_UPDATED, SYSTEM_OPEN } from '../src/system-inject.js'
-import { coreToolsHint, selectCoreTools, toolsNamedInText } from '../src/fs-route.js'
+import { applySystemInjection, splitSections, systemDelta, sectionHashes, SYSTEM_PARTIAL, SYSTEM_UPDATED, SYSTEM_OPEN } from '../src/system-inject.js'
 import { matchSessionOverride } from '../src/adapter.js'
 import { resolveConfig } from '../src/config.js'
 
@@ -82,26 +81,13 @@ test('systemDelta refuses unsafe deltas (preamble change, reorder, no baseline, 
   assert.match(removed.body, /Removed host sections.*# S2/)
 })
 
-test('core tools hint: exact names, once per session, only exposed tools', () => {
-  assert.equal(coreToolsHint('srv', ['web_search'], ['bash']), '')
-  const h = coreToolsHint('srv', ['bash', 'read', 'skill'], ['bash', 'read', 'grep'])
-  assert.match(h, /mcp_srv_bash, mcp_srv_read\./)
-  assert.doesNotMatch(h, /mcp_srv_grep/)
-  const m = { jiuwenSessionId: 'j' }
-  const a = applyCoreToolsInjection('q', m, 'srv', ['bash'], ['bash'])
-  assert.ok(a.hash && a.query.endsWith('q') && a.query.includes('[Host core tools]'))
-  m.coreToolsHash = a.hash
-  assert.equal(applyCoreToolsInjection('q', m, 'srv', ['bash'], ['bash']).query, 'q')
-})
-
 test('config defaults and sessionOverrides matching', () => {
   const c = resolveConfig({}, { env: {} })
   assert.equal(c.injectSystemUpdate, 'diff')
   assert.equal(c.hostSkillInject, 'index')
   assert.equal(c.skillLoaderTool, 'skill')
-  assert.deepEqual(c.coreTools, ['bash', 'read', 'edit', 'write', 'glob', 'grep'])
+  assert.equal(c.coreTools, undefined, 'prompt-based core-tool hint removed')
   assert.deepEqual(c.sessionOverrides, [])
-  assert.deepEqual(resolveConfig({ coreTools: [] }, { env: {} }).coreTools, [])
   assert.equal(resolveConfig({}, { env: { JIUWEN_HOST_SKILL_INJECT: 'body' } }).hostSkillInject, 'body')
   const list = resolveConfig({ sessionOverrides: [{ match: 'worker-*', modelName: 'fast' }, { match: '*', chatMode: 'agent' }] }, { env: {} }).sessionOverrides
   assert.equal(matchSessionOverride(list, 'worker-1').modelName, 'fast')
@@ -109,10 +95,3 @@ test('config defaults and sessionOverrides matching', () => {
   assert.equal(matchSessionOverride([], 'x'), undefined)
 })
 
-test('core tool selection: globs and tools named in the host prompt', () => {
-  const ex = ['bash', 'orchestrator_ack', 'orchestrator_report', 'web_search', 'read']
-  assert.deepEqual(selectCoreTools(ex, ['read', 'orchestrator_*', 'bash']), ['read', 'orchestrator_ack', 'orchestrator_report', 'bash'])
-  assert.deepEqual(toolsNamedInText(ex, 'Call orchestrator_report when done; use `web_search` rarely. Not orchestrator_acknowledge.'), ['orchestrator_report', 'web_search'])
-  assert.deepEqual(toolsNamedInText(ex, ''), [])
-  assert.equal(resolveConfig({}, { env: {} }).coreToolsFromSystem, 12)
-})

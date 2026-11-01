@@ -138,7 +138,6 @@ export class SessionStore {
     if (extra.systemHash) mapping.systemHash = String(extra.systemHash)
     if (extra.systemSections && typeof extra.systemSections === 'object') mapping.systemSections = extra.systemSections
     if (extra.skillInjectHash) mapping.skillInjectHash = String(extra.skillInjectHash)
-    if (extra.coreToolsHash) mapping.coreToolsHash = String(extra.coreToolsHash)
     if (extra.pendingQuestion !== undefined) {
       if (extra.pendingQuestion) mapping.pendingQuestion = extra.pendingQuestion
       else delete mapping.pendingQuestion
@@ -188,7 +187,6 @@ export class SessionStore {
           ...(entry.systemHash ? { systemHash: String(entry.systemHash) } : {}),
           ...(entry.systemSections && typeof entry.systemSections === 'object' ? { systemSections: entry.systemSections } : {}),
           ...(entry.skillInjectHash ? { skillInjectHash: String(entry.skillInjectHash) } : {}),
-          ...(entry.coreToolsHash ? { coreToolsHash: String(entry.coreToolsHash) } : {}),
           ...(entry.swarmRunId ? { swarmRunId: String(entry.swarmRunId) } : {}),
           ...(entry.projectDir ? { projectDir: String(entry.projectDir) } : {}),
           ...(Array.isArray(entry.mcpNames) ? { mcpNames: entry.mcpNames.map(String) } : {}),

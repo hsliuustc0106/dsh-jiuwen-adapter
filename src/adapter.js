@@ -14,8 +14,7 @@ import { createToolBridge } from './tool-bridge.js'
 import { prepareBrainRequest, callKind } from './agent-brain.js'
 import { appendFileSync } from 'node:fs'
 import { failureFromError, emitTextReply } from './stream-emit.js'
-import { applySystemInjection, applyFsRouteInjection, applyCoreToolsInjection, latestSystemText } from './system-inject.js'
-import { toolsNamedInText } from './fs-route.js'
+import { applySystemInjection, applyFsRouteInjection } from './system-inject.js'
 import { applySkillBodyInjection } from './host-sync.js'
 import { toGatewayQuery, contentToText, withInferredRoles } from './messages.js'
 import { fileBlocksFromHandles } from './multimodal.js'
@@ -242,7 +241,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
             }
           }
           // injectSystem (jiuwen sessions only; fail soft). Skipped for aux calls and ask_user answers.
-          let systemHash, systemSections, skillInjectHash, coreToolsHash
+          let systemHash, systemSections, skillInjectHash
       if (!aux && cfg.injectSystem !== 'off' && !turnMapping.pendingQuestion) {
             const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId), cfg.injectSystemMaxBytes, cfg.injectSystemUpdate)
             query = inj.query; systemHash = inj.hash; systemSections = inj.sections
@@ -264,12 +263,6 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
             if (fs.hash) turnMapping.fsRouteHash = fs.hash
           }
           const exposedNow = mcpAttached ? (deps.mcpBridge.exposed?.(dshSessionId) || []) : []
-          if (!aux && mcpAttached && (cfg.coreTools?.length || cfg.coreToolsFromSystem > 0) && !turnMapping.pendingQuestion) {
-            const fromSys = cfg.coreToolsFromSystem > 0 ? toolsNamedInText(exposedNow, latestSystemText(options), cfg.coreToolsFromSystem) : []
-            const ct = applyCoreToolsInjection(query, turnMapping, mcpName, exposedNow, [...(cfg.coreTools || []), ...fromSys])
-            query = ct.query
-            if (ct.hash) { coreToolsHash = ct.hash; trace({ at: 'core-tools-hint', dshSessionId, hash: ct.hash }) }
-          }
           if (!aux && cfg.syncSkillInstall !== false && turnMapping.skillBodies?.length) {
             const loader = cfg.skillLoaderTool && exposedNow.includes(cfg.skillLoaderTool) ? `mcp_${mcpName}_${cfg.skillLoaderTool}` : undefined
             query = applySkillBodyInjection(query, turnMapping, { mode: cfg.hostSkillInject, loaderTool: loader,
@@ -303,7 +296,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
               trace({ at: 'turn-end', reason: info.reason, chars: info.text?.length, ...(info.interrupted ? { interrupted: true } : {}) })
               recorded = true
               if (!aux && (info.reason?.kind === 'stop' || info.reason?.kind === 'aborted')) {
-                deps.sessions.recordTurn?.(dshSessionId, { requestId: info.requestId, pendingQuestion: info.pendingQuestion, ...(systemHash ? { systemHash, systemSections } : {}), ...(skillInjectHash ? { skillInjectHash } : {}), ...(coreToolsHash ? { coreToolsHash } : {}) })
+                deps.sessions.recordTurn?.(dshSessionId, { requestId: info.requestId, pendingQuestion: info.pendingQuestion, ...(systemHash ? { systemHash, systemSections } : {}), ...(skillInjectHash ? { skillInjectHash } : {}) })
               }
               // Turns usually end on the terminal chat.final grace, before Gateway's processing_status
               // {is_complete} arrives, so bridges (planBridge) key off this explicit turn_end event.

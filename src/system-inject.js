@@ -8,7 +8,7 @@
  */
 import { createHash } from 'node:crypto'
 import { contentToText } from './messages.js'
-import { fsRouteHint, coreToolsHint } from './fs-route.js'
+import { fsRouteHint } from './fs-route.js'
 
 export const SYSTEM_OPEN = '[System instructions from host]'
 export const SYSTEM_CLOSE = '[/System]'
@@ -178,15 +178,3 @@ export function applyFsRouteInjection(query, mapping, enabled, serverName) {
   }
 }
 
-/** Announce the session's core host tools once per Jiuwen session (hash-gated, see coreToolsHint). */
-export function applyCoreToolsInjection(query, mapping, serverName, exposed, coreTools) {
-  try {
-    const hint = coreToolsHint(serverName, exposed, coreTools)
-    if (!hint) return { query }
-    const hash = systemHash(`core-tools:${mapping?.jiuwenSessionId || ''}\n${hint}`)
-    if (mapping?.coreToolsHash === hash) return { query }
-    return { query: `${hint}\n\n${query}`, hash }
-  } catch {
-    return { query }
-  }
-}

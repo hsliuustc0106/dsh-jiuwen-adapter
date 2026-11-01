@@ -85,10 +85,6 @@ export interface JiuwenAdapterConfig {
   hostSkillInject?: 'index' | 'body' | 'off'
   /** Passthrough host tool that loads a skill body by name (default 'skill'). */
   skillLoaderTool?: string
-  /** Host tools announced once per session for batched discovery under progressive tools (default bash/read/edit/write/glob/grep; [] disables). */
-  coreTools?: string[]
-  /** Also announce passthrough tools named verbatim in the host system prompt (max N, default 12; 0 disables). */
-  coreToolsFromSystem?: number
   /** Per-session overrides by dsh session id glob; first match wins. */
   sessionOverrides?: Array<{ match: string, modelName?: string, chatMode?: string, agentTemplateName?: string }>
   /** Route Jiuwen built-in bash/write_file/edit_file to the dsh MCP passthrough tools. */

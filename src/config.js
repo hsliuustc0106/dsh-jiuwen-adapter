@@ -256,13 +256,6 @@ export function resolveConfig(raw = {}, opts = {}) {
     hostSkillInject: pickEnum(env.JIUWEN_HOST_SKILL_INJECT || raw.hostSkillInject, ['index', 'body', 'off'], 'index'),
     /** Passthrough host tool that returns a skill body by name (dsh: `skill`). */
     skillLoaderTool: firstNonEmpty(env.JIUWEN_SKILL_LOADER_TOOL, typeof raw.skillLoaderTool === 'string' ? raw.skillLoaderTool : undefined) || 'skill',
-    /** Host tools announced once per session as core (batched discovery under progressive tools). [] disables. */
-    coreTools: (() => {
-      const v = env.JIUWEN_CORE_TOOLS !== undefined ? String(env.JIUWEN_CORE_TOOLS).split(',') : raw.coreTools
-      return Array.isArray(v) ? v.map(x => String(x).trim()).filter(Boolean) : ['bash', 'read', 'edit', 'write', 'glob', 'grep']
-    })(),
-    /** Also treat passthrough tools named verbatim in the host system prompt as core (max N; 0 disables). */
-    coreToolsFromSystem: (() => { const n = Number(env.JIUWEN_CORE_TOOLS_FROM_SYSTEM ?? raw.coreToolsFromSystem); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 12 })(),
     /** Per-session overrides by dsh session id glob, e.g. [{ match: 'worker-*', modelName: 'x', chatMode: 'agent' }]. First match wins; empty by default. */
     sessionOverrides: (Array.isArray(raw.sessionOverrides) ? raw.sessionOverrides : [])
       .filter(o => o && typeof o.match === 'string')
