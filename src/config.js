@@ -242,6 +242,23 @@ export function resolveConfig(raw = {}, opts = {}) {
     syncTitle: syncBit('syncTitle', 'JIUWEN_SYNC_TITLE'),
     syncDelete: syncBit('syncDelete', 'JIUWEN_SYNC_DELETE'),
     syncGoal: syncBit('syncGoal', 'JIUWEN_SYNC_GOAL'),
+    /** When the host system prompt changes mid-session: diff (default; resend only changed heading sections when clearly smaller) | full (resend everything). */
+    injectSystemUpdate: pickEnum(env.JIUWEN_INJECT_SYSTEM_UPDATE || raw.injectSystemUpdate, ['diff', 'full'], 'diff'),
+    /** Host skills Jiuwen lacks: index (default; name+description once, bodies loaded on demand via skillLoaderTool) | body (legacy inline bodies) | off. Falls back to body when the loader tool is not passed through. */
+    hostSkillInject: pickEnum(env.JIUWEN_HOST_SKILL_INJECT || raw.hostSkillInject, ['index', 'body', 'off'], 'index'),
+    /** Passthrough host tool that returns a skill body by name (dsh: `skill`). */
+    skillLoaderTool: firstNonEmpty(env.JIUWEN_SKILL_LOADER_TOOL, typeof raw.skillLoaderTool === 'string' ? raw.skillLoaderTool : undefined) || 'skill',
+    /** Host tools announced once per session as core (batched discovery under progressive tools). [] disables. */
+    coreTools: (() => {
+      const v = env.JIUWEN_CORE_TOOLS !== undefined ? String(env.JIUWEN_CORE_TOOLS).split(',') : raw.coreTools
+      return Array.isArray(v) ? v.map(x => String(x).trim()).filter(Boolean) : ['bash', 'read', 'edit', 'write', 'glob', 'grep']
+    })(),
+    /** Also treat passthrough tools named verbatim in the host system prompt as core (max N; 0 disables). */
+    coreToolsFromSystem: (() => { const n = Number(env.JIUWEN_CORE_TOOLS_FROM_SYSTEM ?? raw.coreToolsFromSystem); return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 12 })(),
+    /** Per-session overrides by dsh session id glob, e.g. [{ match: 'worker-*', modelName: 'x', chatMode: 'agent' }]. First match wins; empty by default. */
+    sessionOverrides: (Array.isArray(raw.sessionOverrides) ? raw.sessionOverrides : [])
+      .filter(o => o && typeof o.match === 'string')
+      .map(o => ({ match: o.match, ...(typeof o.modelName === 'string' ? { modelName: o.modelName } : {}), ...(typeof o.chatMode === 'string' ? { chatMode: o.chatMode } : {}), ...(typeof o.agentTemplateName === 'string' ? { agentTemplateName: o.agentTemplateName } : {}) })),
     syncPause: syncBit('syncPause', 'JIUWEN_SYNC_PAUSE'),
     syncPermissions: syncBit('syncPermissions', 'JIUWEN_SYNC_PERMISSIONS'),
     syncFork: syncBit('syncFork', 'JIUWEN_SYNC_FORK'),

@@ -14,7 +14,8 @@ import { createToolBridge } from './tool-bridge.js'
 import { prepareBrainRequest, callKind } from './agent-brain.js'
 import { appendFileSync } from 'node:fs'
 import { failureFromError, emitTextReply } from './stream-emit.js'
-import { applySystemInjection, applyFsRouteInjection } from './system-inject.js'
+import { applySystemInjection, applyFsRouteInjection, applyCoreToolsInjection, latestSystemText } from './system-inject.js'
+import { toolsNamedInText } from './fs-route.js'
 import { applySkillBodyInjection } from './host-sync.js'
 import { toGatewayQuery, contentToText, withInferredRoles } from './messages.js'
 import { fileBlocksFromHandles } from './multimodal.js'
@@ -215,6 +216,15 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
               overrides.mcp = [...(overrides.mcp || []), ...mapping.mcpNames]
             }
           }
+          // sessionOverrides: generic per-session-id glob knobs (model/chat mode/template); explicit request + /jiuwen mode win.
+          {
+            const so = matchSessionOverride(cfg.sessionOverrides, dshSessionId)
+            if (so) {
+              if (so.modelName && !overrides.modelName) overrides.modelName = so.modelName
+              if (so.chatMode && !mapping.chatMode) overrides.chatMode = so.chatMode
+              if (so.agentTemplateName && !mapping.agentTemplateName) overrides.agentTemplateName = so.agentTemplateName
+            }
+          }
           if (overrides.supportsUserInteraction === 'auto') overrides.supportsUserInteraction = Boolean(deps.hasUserQuestions?.())
           // Auxiliary calls (compaction, jiuwen titles) use a throwaway Jiuwen session + full transcript.
           const aux = Boolean(options.purpose)
@@ -230,11 +240,11 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
             }
           }
           // injectSystem (jiuwen sessions only; fail soft). Skipped for aux calls and ask_user answers.
-          let systemHash
+          let systemHash, systemSections, skillInjectHash, coreToolsHash
       if (!aux && cfg.injectSystem !== 'off' && !turnMapping.pendingQuestion) {
-            const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId), cfg.injectSystemMaxBytes)
-            query = inj.query; systemHash = inj.hash
-            if (inj.hash) makeTrace(cfg.traceFile)({ at: 'system-inject', dshSessionId, mode: cfg.injectSystem, bytes: inj.bytes, updated: inj.updated, hash: inj.hash })
+            const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId), cfg.injectSystemMaxBytes, cfg.injectSystemUpdate)
+            query = inj.query; systemHash = inj.hash; systemSections = inj.sections
+            if (inj.hash) makeTrace(cfg.traceFile)({ at: 'system-inject', dshSessionId, mode: cfg.injectSystem, bytes: inj.bytes, updated: inj.updated, hash: inj.hash, ...(inj.delta ? { delta: true, fullBytes: inj.fullBytes } : {}) })
           }
           const trace = makeTrace(cfg.traceFile)
           let mcpName = cfg.mcpServerName
@@ -251,8 +261,17 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
             query = fs.query
             if (fs.hash) turnMapping.fsRouteHash = fs.hash
           }
+          const exposedNow = mcpAttached ? (deps.mcpBridge.exposed?.(dshSessionId) || []) : []
+          if (!aux && mcpAttached && (cfg.coreTools?.length || cfg.coreToolsFromSystem > 0) && !turnMapping.pendingQuestion) {
+            const fromSys = cfg.coreToolsFromSystem > 0 ? toolsNamedInText(exposedNow, latestSystemText(options), cfg.coreToolsFromSystem) : []
+            const ct = applyCoreToolsInjection(query, turnMapping, mcpName, exposedNow, [...(cfg.coreTools || []), ...fromSys])
+            query = ct.query
+            if (ct.hash) { coreToolsHash = ct.hash; trace({ at: 'core-tools-hint', dshSessionId, hash: ct.hash }) }
+          }
           if (!aux && cfg.syncSkillInstall !== false && turnMapping.skillBodies?.length) {
-            query = applySkillBodyInjection(query, turnMapping)
+            const loader = cfg.skillLoaderTool && exposedNow.includes(cfg.skillLoaderTool) ? `mcp_${mcpName}_${cfg.skillLoaderTool}` : undefined
+            query = applySkillBodyInjection(query, turnMapping, { mode: cfg.hostSkillInject, loaderTool: loader,
+              onInjected: (h, mode) => { skillInjectHash = h; trace({ at: 'skill-inject', dshSessionId, mode, skills: turnMapping.skillBodies.length, hash: h }) } })
           }
           trace({ at: 'turn-start', dshSessionId, jiuwen: turnMapping.jiuwenSessionId, purpose: options.purpose, query: query.slice(0, 500), messages: (options.messages || []).length,
             blocks: JSON.stringify((options.messages || []).flatMap(m => Array.isArray(m.content) ? m.content.filter(b => b?.type !== 'text') : [])).slice(0, 1500) })
@@ -282,7 +301,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
               trace({ at: 'turn-end', reason: info.reason, chars: info.text?.length, ...(info.interrupted ? { interrupted: true } : {}) })
               recorded = true
               if (!aux && (info.reason?.kind === 'stop' || info.reason?.kind === 'aborted')) {
-                deps.sessions.recordTurn?.(dshSessionId, { requestId: info.requestId, pendingQuestion: info.pendingQuestion, ...(systemHash ? { systemHash } : {}) })
+                deps.sessions.recordTurn?.(dshSessionId, { requestId: info.requestId, pendingQuestion: info.pendingQuestion, ...(systemHash ? { systemHash, systemSections } : {}), ...(skillInjectHash ? { skillInjectHash } : {}), ...(coreToolsHash ? { coreToolsHash } : {}) })
               }
               // Turns usually end on the terminal chat.final grace, before Gateway's processing_status
               // {is_complete} arrives, so bridges (planBridge) key off this explicit turn_end event.
@@ -516,4 +535,14 @@ export async function loadJiuwenAdapterClass() {
   } catch {
     return createJiuwenAdapter(null, deps)
   }
+}
+
+/** First sessionOverrides entry whose `match` glob (`*` wildcard) matches the dsh session id. */
+export function matchSessionOverride(list, id) {
+  if (!Array.isArray(list) || !list.length || !id) return undefined
+  for (const o of list) {
+    const re = new RegExp(`^${String(o.match).split('*').map(x => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`)
+    if (re.test(String(id))) return o
+  }
+  return undefined
 }

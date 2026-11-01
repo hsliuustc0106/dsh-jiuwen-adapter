@@ -3,6 +3,14 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [SemVer](https://semver.org/).
 
+## Unreleased — generic per-session context dedupe
+
+- **Host skills as an index** (`hostSkillInject: index`, default): name + description once per Jiuwen session, bodies on demand via the passthrough `skill` tool; hash persisted across restarts; generic secret redaction for any forwarded skill text. `body` keeps the old behaviour.
+- **Incremental system prompt updates** (`injectSystemUpdate: diff`, default): section-level delta on change, full block otherwise; section hashes persisted on the mapping (no prompt text stored).
+- **Core tools under progressive discovery** (`coreTools`, `coreToolsFromSystem`): one batched `tool_search` authorizes the session's core host tools; `progressive_tool_enabled` untouched.
+- **MCP passthrough**: schema publish/reconnect skipped when the per-session tool set hash is unchanged.
+- **`sessionOverrides`**: per-session-id glob knobs (model / chat mode / template), empty by default.
+
 ## Unreleased
 
 - Interrupt on busy (`onBusyMessage: 'interrupt' | 'queue'`, default `interrupt`, env `JIUWEN_ON_BUSY_MESSAGE`; `interruptSettleMs`): a user message arriving while a Jiuwen turn runs interrupts it via `chat.interrupt`, coalesces all messages that arrived meanwhile into one step, and resends with a note that the previous turn was interrupted (side effects not rolled back). Deferred while an approval card is pending; host stop wins. New trace event `turn-interrupt`.

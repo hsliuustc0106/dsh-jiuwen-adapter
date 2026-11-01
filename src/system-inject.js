@@ -8,12 +8,63 @@
  */
 import { createHash } from 'node:crypto'
 import { contentToText } from './messages.js'
-import { fsRouteHint } from './fs-route.js'
+import { fsRouteHint, coreToolsHint } from './fs-route.js'
 
 export const SYSTEM_OPEN = '[System instructions from host]'
 export const SYSTEM_CLOSE = '[/System]'
 export const SYSTEM_MAX_BYTES = 64 * 1024
 export const SYSTEM_UPDATED = '[System instructions from host — updated; they replace the previous host instructions]'
+export const SYSTEM_PARTIAL = '[System instructions from host — partial update; each section below replaces the earlier host section with the same heading, all other host sections stay in force]'
+
+/**
+ * Split a prompt into heading-delimited sections (markdown `#`..`###` headings; text before the first
+ * heading is the preamble). Keys are the heading line plus an occurrence index, so duplicates stay distinct.
+ */
+export function splitSections(text) {
+  const out = []
+  const seen = new Map()
+  let cur = { head: '', lines: [] }
+  const flush = () => {
+    const n = (seen.get(cur.head) || 0) + 1; seen.set(cur.head, n)
+    out.push({ key: `${cur.head}#${n}`, head: cur.head, text: cur.lines.join('\n') })
+  }
+  for (const line of String(text || '').split('\n')) {
+    if (/^#{1,3} \S/.test(line)) { flush(); cur = { head: line.trim(), lines: [line] } } else cur.lines.push(line)
+  }
+  flush()
+  return out.filter(s => s.head || s.text.trim())
+}
+
+/** { key: hash } per section (stored on the mapping; never the text itself). */
+export function sectionHashes(text) {
+  const m = {}
+  for (const s of splitSections(text)) m[s.key] = createHash('sha256').update(s.text).digest('hex').slice(0, 12)
+  return m
+}
+
+/**
+ * Section-level delta between the previously sent prompt (by section hashes) and `text`.
+ * Returns undefined when a delta is not safe/useful (no baseline, preamble changed, reordering, or the
+ * delta is not clearly smaller than the full prompt).
+ */
+export function systemDelta(prevHashes, text, maxRatio = 0.6) {
+  if (!prevHashes || typeof prevHashes !== 'object' || !Object.keys(prevHashes).length) return undefined
+  const secs = splitSections(text)
+  const cur = sectionHashes(text)
+  const changed = secs.filter(s => prevHashes[s.key] !== cur[s.key])
+  const removed = Object.keys(prevHashes).filter(k => !(k in cur))
+  if (!changed.length && !removed.length) return undefined
+  if (changed.some(s => !s.head)) return undefined // preamble has no heading to anchor a replacement
+  const prevOrder = Object.keys(prevHashes).filter(k => k in cur)
+  const curOrder = secs.map(s => s.key).filter(k => k in prevHashes)
+  if (prevOrder.join('\u0000') !== curOrder.join('\u0000')) return undefined
+  const body = [
+    ...changed.map(s => s.text.trim()),
+    ...(removed.length ? [`Removed host sections (no longer apply): ${removed.map(k => k.replace(/#\d+$/, '')).join('; ')}`] : []),
+  ].join('\n\n')
+  if (Buffer.byteLength(body) > maxRatio * Buffer.byteLength(text)) return undefined
+  return { body, changed: changed.length, removed: removed.length }
+}
 
 /** Latest system text: in-history system/developer messages win over options.system. */
 export function latestSystemText(options) {
@@ -90,7 +141,7 @@ export function systemHash(text) {
  * @returns {{ query: string, hash?: string }} query with the block prefixed when it is new for
  * this mapping (hash differs from mapping.systemHash); otherwise the query unchanged.
  */
-export function applySystemInjection(query, options, mapping, mode, fallbackPersona, maxBytes = SYSTEM_MAX_BYTES) {
+export function applySystemInjection(query, options, mapping, mode, fallbackPersona, maxBytes = SYSTEM_MAX_BYTES, updateMode = 'full') {
   try {
     if (mode !== 'persona' && mode !== 'full') return { query }
     const sys = latestSystemText(options)
@@ -102,8 +153,13 @@ export function applySystemInjection(query, options, mapping, mode, fallbackPers
     const capped = capBytes(body, maxBytes)
     const hash = systemHash(`${mapping?.jiuwenSessionId || ''}\n${mode}\n${capped}`)
     if (mapping?.systemHash === hash) return { query }
+    const sections = sectionHashes(capped)
+    if (mapping?.systemHash && updateMode === 'diff') {
+      const d = systemDelta(mapping.systemSections, capped)
+      if (d) return { query: `${SYSTEM_PARTIAL}\n${d.body}\n${SYSTEM_CLOSE}\n\n${query}`, hash, sections, updated: true, delta: true, bytes: Buffer.byteLength(d.body), fullBytes: Buffer.byteLength(capped) }
+    }
     const open = mapping?.systemHash ? SYSTEM_UPDATED : SYSTEM_OPEN
-    return { query: `${open}\n${capped}\n${SYSTEM_CLOSE}\n\n${query}`, hash, updated: Boolean(mapping?.systemHash), bytes: Buffer.byteLength(capped) }
+    return { query: `${open}\n${capped}\n${SYSTEM_CLOSE}\n\n${query}`, hash, sections, updated: Boolean(mapping?.systemHash), bytes: Buffer.byteLength(capped) }
   } catch {
     return { query }
   }
@@ -116,6 +172,19 @@ export function applyFsRouteInjection(query, mapping, enabled, serverName) {
     const hint = fsRouteHint(serverName)
     const hash = systemHash(`fs-route:${mapping?.jiuwenSessionId || ''}\n${hint}`)
     if (mapping?.fsRouteHash === hash) return { query }
+    return { query: `${hint}\n\n${query}`, hash }
+  } catch {
+    return { query }
+  }
+}
+
+/** Announce the session's core host tools once per Jiuwen session (hash-gated, see coreToolsHint). */
+export function applyCoreToolsInjection(query, mapping, serverName, exposed, coreTools) {
+  try {
+    const hint = coreToolsHint(serverName, exposed, coreTools)
+    if (!hint) return { query }
+    const hash = systemHash(`core-tools:${mapping?.jiuwenSessionId || ''}\n${hint}`)
+    if (mapping?.coreToolsHash === hash) return { query }
     return { query: `${hint}\n\n${query}`, hash }
   } catch {
     return { query }

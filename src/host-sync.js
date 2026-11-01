@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 /**
  * Host → Jiuwen sync for jiuwen-provider sessions only.
  * Namespaced, fail-soft, feature-detected Gateway methods. Defaults ON via hostSync.
@@ -227,7 +228,10 @@ export function installHostSync(deps) {
           try {
             const full = typeof reg.get === 'function' ? await reg.get(name, opts) : undefined
             const content = full?.content
-            if (typeof content === 'string' && content.trim()) unknown.push({ name, content: content.slice(0, 4000) })
+            if (typeof content === 'string' && content.trim()) {
+              const description = typeof full?.description === 'string' && full.description.trim() !== content.trim() ? skillDescription(full, content) : ''
+              unknown.push({ name, content: content.slice(0, 4000), ...(description ? { description } : {}) })
+            }
           } catch (e) { soft(logger, 'skills.get', e) }
         }
       }
@@ -630,15 +634,71 @@ export function installHostSync(deps) {
   return dispose
 }
 
-/** Soft-inject unknown skill bodies into a chat query (install gap path). */
-export function applySkillBodyInjection(query, mapping) {
+// Common credential shapes; host skill bodies are forwarded as prompt text, so mask them first.
+const SECRET_PATTERNS = [
+  /\b(sk|pk|rk)-[A-Za-z0-9_-]{16,}/g,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
+  /\bxox[abposr]-[A-Za-z0-9-]{10,}/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bAIza[0-9A-Za-z_-]{30,}/g,
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+]
+const SECRET_ASSIGN = /\b([A-Za-z0-9_]*(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD|ACCESS[_-]?KEY)[A-Za-z0-9_]*)(\s*[:=]\s*)(["']?)([^\s"'`]{8,})\3/gi
+
+/** Mask credential-looking values (generic patterns; never echoes the value). */
+export function redactSecrets(text) {
+  let out = String(text ?? '')
+  for (const re of SECRET_PATTERNS) out = out.replace(re, '[REDACTED]')
+  out = out.replace(SECRET_ASSIGN, (m, k, sep, q, v) => (/^\$\{?[A-Za-z_]/.test(v) || /^<.*>$/.test(v)) ? m : `${k}${sep}${q}[REDACTED]${q}`)
+  return out
+}
+
+/** One-line description of a host skill: registry field, else frontmatter `description:`, else first prose line. */
+export function skillDescription(full, content) {
+  const pick = (v) => (typeof v === 'string' && v.trim() ? v.replace(/\s+/g, ' ').trim().slice(0, 240) : '')
+  const d = pick(full?.description) || pick(full?.summary)
+  if (d) return d
+  const text = String(content || '')
+  const fm = /^---\s*\n([\s\S]*?)\n---/.exec(text)
+  const m = fm && /^description:\s*["']?(.+?)["']?\s*$/m.exec(fm[1])
+  if (m) return pick(m[1])
+  const body = fm ? text.slice(fm[0].length) : text
+  const line = body.split('\n').map(l => l.trim()).find(l => l && !/^#/.test(l) && !/^[-*_]{3,}$/.test(l))
+  return pick(line)
+}
+
+export const SKILL_BODY_OPEN = '[Host skill instructions — not installed in Jiuwen; body only]'
+export const SKILL_INDEX_OPEN = '[Host skills available — not installed in Jiuwen; index only]'
+
+/**
+ * Soft-inject host skills Jiuwen does not know (install gap path), once per Jiuwen session and again
+ * only when the set changes (hash-gated, persisted as mapping.skillInjectHash).
+ *  - mode 'body' (legacy): full bodies inline.
+ *  - mode 'index' (default when a loader tool is reachable): name + one-line description only; the model
+ *    loads a body on demand through the host's skill tool (opts.loaderTool, e.g. mcp_<server>_skill).
+ * Bodies and descriptions are passed through redactSecrets(). Returns the query (unchanged on any error).
+ */
+export function applySkillBodyInjection(query, mapping, opts = {}) {
   try {
     const bodies = mapping?.skillBodies
     if (!Array.isArray(bodies) || !bodies.length) return query
-    if (mapping.skillBodiesInjected) return query
-    const block = bodies.map(b => `### Host skill: ${b.name}\n${b.content}`).join('\n\n')
+    const mode = opts.mode === 'index' && opts.loaderTool ? 'index' : (opts.mode === 'off' ? 'off' : 'body')
+    if (mode === 'off') return query
+    const sig = createHash('sha256').update(`${mode}\n${opts.loaderTool || ''}\n${JSON.stringify(bodies)}`).digest('hex').slice(0, 16)
+    if (mapping.skillBodiesInjected && (!mapping.skillInjectHash || mapping.skillInjectHash === sig)) return query
+    if (mapping.skillInjectHash === sig) { mapping.skillBodiesInjected = true; return query }
+    let block
+    if (mode === 'index') {
+      const lines = bodies.map(b => `- ${b.name}: ${redactSecrets(b.description || skillDescription(undefined, b.content) || '(no description)')}`)
+      block = `${SKILL_INDEX_OPEN}\nThese host skills are not installed in Jiuwen. When a task matches one, load its full instructions first by calling ${opts.loaderTool} with the skill name, then follow them. Do not load skills that are not relevant.\n${lines.join('\n')}\n[/Host skills]`
+    } else {
+      block = `${SKILL_BODY_OPEN}\n${bodies.map(b => `### Host skill: ${b.name}\n${redactSecrets(b.content)}`).join('\n\n')}\n[/Host skill instructions]`
+    }
     mapping.skillBodiesInjected = true
-    return `[Host skill instructions — not installed in Jiuwen; body only]\n${block}\n[/Host skill instructions]\n\n${query}`
+    mapping.skillInjectHash = sig
+    if (typeof opts.onInjected === 'function') { try { opts.onInjected(sig, mode) } catch { /* ignore */ } }
+    return `${block}\n\n${query}`
   } catch { return query }
 }
 
