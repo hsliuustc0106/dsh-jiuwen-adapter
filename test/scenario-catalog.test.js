@@ -48,6 +48,12 @@ export const SCENARIOS = [
   ['memory: session-query tools skip the passthrough approval gate (fix)', 'mcp-bridge', 'memory plugins: read-only session-query tools'],
   ['memory: plugin compat matrix row', 'plugin-compat-matrix', 'memory: agent-instructions, session-reference, session-search'],
   ['memory: real plain dsh profiles, both load orders, non-jiuwen + jiuwen', 'live-plain-dsh', 'memoryChecks'],
+  ['auto-review: dsh Auto preset → Jiuwen ask (fix)', 'host-sync-fixes', 'dsh Auto preset (dsh-experimental-auto-review) maps to Jiuwen ask'],
+  ['mcp-client tool via passthrough: bounded approval deny', 'mcp-bridge', 'mcp-client tools (mcp__server__tool) via passthrough'],
+  ['MCP passthrough: changed schema union re-registers with a new revision (stale tool_search index fix)', 'mcp-bridge', 'stale tool index: a connected proxy at an older schema revision'],
+  ['extra plugins matrix rows (auto-review, compaction, turn-outline, time-context, mcp-client, ralph, terminal, worktree)', 'plugin-compat-matrix', 'dsh-experimental-auto-review (auto preset)'],
+  ['extra plugins in real plain dsh profiles, both load orders', 'live-plain-dsh', 'extChecks'],
+  ['live /jiuwen command pass (rename, pause/resume, goal, workflows, history, btw, recap, supplement, skill-toggle, plan-status, compact, fork, archive, delete)', 'live', 'live /jiuwen commands'],
 ]
 
 test('scenario catalog: every scenario points at an existing test', () => {

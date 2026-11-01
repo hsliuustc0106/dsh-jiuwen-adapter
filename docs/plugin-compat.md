@@ -21,6 +21,19 @@ Tested with dsh 0.2.1-rc.5, a plain web profile (`dsh-base` + `dsh-web-app`, no 
 | workspace archive / agent dispose | ✓ | Jiuwen session kept while dsh still stores it | PASS |
 | mcp-resources, subagent, todo, compaction, approval, web tools | ✓ | not mirrored; unchanged | PASS (graceful) |
 
+## Extra plugins
+
+Tested in real profiles in both load orders with the stand-in model: `PLAIN_DSH_ONLY=ext npm run test:plain-dsh`.
+
+| Plugin | Non-jiuwen | Jiuwen sessions | Verdict |
+|---|---|---|---|
+| dsh-compaction / compaction-basic / command-compact | `compactNow` works | the summary is local (`compactionMode: local`); the same Jiuwen session continues and no extra Jiuwen turn is created | works |
+| dsh-session-turn-outline | outline matches the turns | the outline counts the Jiuwen turns | works |
+| dsh-mcp-client (stdio) | tool runs | the tool reaches Jiuwen as `mcp_dsh-tools_mcp__<server>__<tool>`; calls are approval-gated, and with no UI they are denied after `approvalTimeoutMs` | works (gated) |
+| dsh-time-context | injected | not forwarded (Jiuwen stamps its own time) | works |
+| ralph / terminal / worktree bundles | tools registered | the tools are published to Jiuwen over dsh-tools (approval-gated) | works (gated) |
+| dsh-experimental-auto-review (Auto preset) | Auto preset applies | Auto → Jiuwen `ask` (bash, write, edit). Fixed: before, Jiuwen stayed at the previous level | works after fix |
+
 ## Memory-module plugins
 
 dsh has no plugin literally named "memory". Its memory and recall layer is three plugins. Each was tested in real profiles in both load orders with the stand-in model (`npm run test:plain-dsh`).

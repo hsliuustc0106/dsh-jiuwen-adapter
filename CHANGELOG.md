@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+- Fix: MCP passthrough tools added or changed after Jiuwen started are now found by Jiuwen `tool_search`. The registration carries a schema revision, so Jiuwen spawns a fresh proxy instead of reusing its cached one.
+- Fix: the dsh Auto preset (auto-review) now maps to Jiuwen `ask`. Before, Jiuwen stayed at the previous level, e.g. deny after read-only.
+- Tests: live `/jiuwen` command pass (`test/live/commands.mjs`); plain-dsh extra-plugin phase (compaction, turn-outline, mcp-client, time-context, ralph, terminal, worktree, auto-review).
 - Interrupt on busy (`onBusyMessage: 'interrupt' | 'queue'`, default `interrupt`, env `JIUWEN_ON_BUSY_MESSAGE`; `interruptSettleMs`): a user message arriving while a Jiuwen turn runs interrupts it via `chat.interrupt`, coalesces all messages that arrived meanwhile into one step, and resends with a note that the previous turn was interrupted (side effects not rolled back). Deferred while an approval card is pending; host stop wins. New trace event `turn-interrupt`.
 - Memory-module plugins (agent-instructions, session-reference, session-search) verified with Jiuwen sessions.
   - Fix: read-only dsh session-query tools skip the passthrough approval gate (`toolApprovalExempt`); before, they hung Jiuwen turns until approval timed out.

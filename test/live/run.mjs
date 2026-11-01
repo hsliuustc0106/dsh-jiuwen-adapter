@@ -37,6 +37,7 @@ try {
   else console.log('SKIP live-gateway-smoke (needs a working real model; set LIVE_SMOKE=1)')
   if (useStandin) {
     sh(process.env.JW_USE_STANDIN_CMD); if (!(await waitGateway())) throw new Error('Gateway did not come back on the stand-in')
+    step('live /jiuwen commands', ['test/live/commands.mjs'])
     step('live-deep (A–M, L leak)', ['--expose-gc', 'scripts/live-deep.mjs'], { LEAK_TURNS: process.env.LEAK_TURNS || '200' })
     if (process.env.DSH_NM) step('compat-runtime --sync --sync2 --reload', ['scripts/compat-runtime.mjs', '--jiuwen', `--gateway=${GATEWAY}`, '--sync', '--sync2', '--reload'])
     if (process.env.GW_KILL && process.env.GW_START) { step('live-drop-recovery', ['scripts/live-drop-recovery.mjs']); await waitGateway() }

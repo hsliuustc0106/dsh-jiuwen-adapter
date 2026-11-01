@@ -136,6 +136,9 @@ Precedence: request > catalog model entry > plugin config.
 
 With `hostSync: false` (and `sessionSync`/`planBridge` off) behaviour matches the pre-sync adapter: no global listeners besides the plugin's own dispose, no host service is written except `ctx.provide(serviceName)`, no default model / permission preset / built-in command / tool is touched, and only namespaced names are used (`/jiuwen`, `jiuwen/*` events, `jiuwen_*` tools, `jiuwenAdapter`). Gateway methods are feature-detected (an `unknown method` answer is cached per Gateway URL; the subcommand soft-fails and disappears from `/jiuwen help`). Covered by `test/compat.test.js`.
 
+**Permission presets → Jiuwen:** read-only → deny, workspace-write → ask, full/danger-full-access → allow, auto (dsh-experimental-auto-review) → ask. The derived `custom` state is not forwarded.
+
+
 
 ## Validation
 
@@ -183,3 +186,4 @@ Interactions:
 
 Trace (`traceFile`): `{"at":"turn-interrupt","phase":"requested"|"deferred"|"coalesced"|"settled"|"resend", …}`
 (`settled` carries `messages`, `promoted`, `waitedMs`, `settledBy`), plus `turn-end` with `interrupted:true`.
+

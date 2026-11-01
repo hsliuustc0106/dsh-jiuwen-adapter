@@ -66,6 +66,8 @@ const AREAS = {
   'workspace archive / agent dispose': { drive: (r, s) => r.fire('api-session/removed', s.id), expect: (c, r, id) => { assert.ok(!c.some(([m]) => m === 'session.delete')); assert.ok(r.sessions.get(id)) } },
   // memory plugins act on model messages / tools only (see memory-plugins + mcp-bridge tests); host-sync must stay out of the way
   'memory: agent-instructions, session-reference, session-search': { drive: (r, s) => { for (const type of ['agent-instructions/change', 'session-reference/resolved', 'session-query/indexed']) r.fire('session/event', s, { type, data: {} }) }, expect: c => assert.equal(c.length, 0) },
+  'dsh-experimental-auto-review (auto preset)': { drive: (r, s) => { r.fire('session/event', s, { type: 'permission/preset', data: { preset: 'workspace-write' } }); r.fire('session/event', s, { type: 'permission/preset', data: { preset: 'auto' } }) }, expect: c => assert.ok(c.some(([m, p]) => /permission/.test(m) && p?.level === 'ask')) },
+  'compaction, turn-outline, time-context, mcp-client, ralph, terminal, worktree (no host-sync side effects)': { drive: (r, s) => { for (const type of ['compaction/start', 'compaction/summary', 'compaction/end', 'time/context', 'terminal/open', 'worktree/created', 'ralph/round']) r.fire('session/event', s, { type, data: {} }) }, expect: c => assert.equal(c.length, 0) },
   'mcp-resources, subagent, todo, compaction, approval, web tools': { drive: (r, s) => { for (const type of ['todo/change', 'compaction/end', 'approval/policy', 'mcp/resources', 'subagent/spawn']) r.fire('session/event', s, { type, data: {} }) }, expect: c => assert.equal(c.length, 0) },
 }
 

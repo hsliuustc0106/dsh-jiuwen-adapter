@@ -15,6 +15,9 @@ const PRESET_LEVELS = Object.freeze({
   'workspace-write': 'ask',
   'full-access': 'allow',
   'danger-full-access': 'allow',
+  // dsh Auto (dsh-experimental-auto-review): full sandbox + an LLM reviewer that only sees dsh tool calls.
+  // Jiuwen's own tools bypass that reviewer, so the closest safe Jiuwen level is ask.
+  auto: 'ask',
   ask: 'ask',
   allow: 'allow',
   deny: 'deny',
