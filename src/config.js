@@ -255,6 +255,8 @@ export function resolveConfig(raw = {}, opts = {}) {
     /** Host skills Jiuwen lacks: index (default; name+description once, bodies loaded on demand via skillLoaderTool) | body (legacy inline bodies) | off. Falls back to body when the loader tool is not passed through. */
     hostSkillInject: pickEnum(env.JIUWEN_HOST_SKILL_INJECT || raw.hostSkillInject, ['index', 'body', 'off'], 'index'),
     /** Passthrough host tool that returns a skill body by name (dsh: `skill`). */
+    /** Best-effort secret masking on the skill loader tool's passthrough output. */
+    redactSkillOutput: raw.redactSkillOutput !== false,
     skillLoaderTool: firstNonEmpty(env.JIUWEN_SKILL_LOADER_TOOL, typeof raw.skillLoaderTool === 'string' ? raw.skillLoaderTool : undefined) || 'skill',
     /** Per-session overrides by dsh session id glob, e.g. [{ match: 'worker-*', modelName: 'x', chatMode: 'agent' }]. First match wins; empty by default. */
     sessionOverrides: (Array.isArray(raw.sessionOverrides) ? raw.sessionOverrides : [])

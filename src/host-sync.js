@@ -639,25 +639,8 @@ export function installHostSync(deps) {
   return dispose
 }
 
-// Common credential shapes; host skill bodies are forwarded as prompt text, so mask them first.
-const SECRET_PATTERNS = [
-  /\b(sk|pk|rk)-[A-Za-z0-9_-]{16,}/g,
-  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
-  /\bxox[abposr]-[A-Za-z0-9-]{10,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bAIza[0-9A-Za-z_-]{30,}/g,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-]
-const SECRET_ASSIGN = /\b([A-Za-z0-9_]*(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD|ACCESS[_-]?KEY)[A-Za-z0-9_]*)(\s*[:=]\s*)(["']?)([^\s"'`]{8,})\3/gi
-
-/** Mask credential-looking values (generic patterns; never echoes the value). */
-export function redactSecrets(text) {
-  let out = String(text ?? '')
-  for (const re of SECRET_PATTERNS) out = out.replace(re, '[REDACTED]')
-  out = out.replace(SECRET_ASSIGN, (m, k, sep, q, v) => (/^\$\{?[A-Za-z_]/.test(v) || /^<.*>$/.test(v)) ? m : `${k}${sep}${q}[REDACTED]${q}`)
-  return out
-}
+export { redactSecrets } from './redact.js'
+import { redactSecrets } from './redact.js'
 
 /** One-line description of a host skill: registry field, else frontmatter `description:`, else first prose line. */
 export function skillDescription(full, content) {

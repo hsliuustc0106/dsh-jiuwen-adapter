@@ -24,6 +24,7 @@ import { mkdirSync, writeFileSync, readFileSync, renameSync, unlinkSync, readdir
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { redactSecrets } from './redact.js'
 
 export const PROXY_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'jiuwen-mcp-proxy.mjs')
 const readJson = (f, d) => { try { return JSON.parse(readFileSync(f, 'utf8')) } catch { return d } }
@@ -151,7 +152,9 @@ export function createMcpBridge({ config, services, rpc, logger }) {
         callId: `jiuwen-${randomUUID()}`, name, arguments: args ?? {}, agent, signal: ac.signal,
         deferContext() {}, concludeTurn() {},
       })
-      return { isError: false, text: toText(result) }
+      const text = toText(result)
+      // The skill loader returns host skill bodies (prompt text, like the index-mode injection): mask secrets.
+      return { isError: false, text: c.skillLoaderTool && name === c.skillLoaderTool && c.redactSkillOutput !== false ? redactSecrets(text) : text }
     } catch (error) {
       return { isError: true, text: `dsh tool ${name} failed: ${error?.message || error}` }
     } finally { clearTimeout(t); e.inflight--; e.lastUsed = Date.now() }
