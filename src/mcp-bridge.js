@@ -17,7 +17,7 @@
  */
 import { createServer } from 'node:http'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { mkdirSync, writeFileSync, readFileSync, renameSync, unlinkSync, readdirSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, renameSync, unlinkSync, readdirSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -161,10 +161,6 @@ export function createMcpBridge({ config, services, rpc, logger }) {
   }
 
   function publishSchemas(e) {
-    // Same tool set as last turn (by content hash) → nothing to rewrite or reconnect.
-    const sig = createHash('sha256').update(JSON.stringify([...e.schemas.values()].map(t => [t.name, t.description, t.parameters || t.inputSchema]))).digest('hex')
-    if (e.schemaSig === sig && existsSync(join(e.stateDir, 'schemas.json'))) return false
-    e.schemaSig = sig
     mkdirSync(e.stateDir, { recursive: true, mode: 0o700 })
     const f = join(e.stateDir, 'schemas.json')
     const prev = readJson(f, [])
