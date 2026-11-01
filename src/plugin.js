@@ -92,7 +92,7 @@ export function apply(ctx, config = {}) {
     if (!fsRouteDenied && readConfig().mapJiuwenFsToDsh) {
       fsRouteDenied = true
       try {
-        await denyJiuwenSideEffectTools((method, params, opts) => gatewayFor().rpc(method, params, opts), logger)
+        await denyJiuwenSideEffectTools((method, params, opts) => gatewayFor().rpc(method, params, opts), logger, { target: String(readConfig().gatewayURL || 'default') })
         logger?.info?.('[dsh-jiuwen] mapJiuwenFsToDsh: denied Jiuwen bash/write_file/edit_file (use mcp_dsh-tools_*)')
       } catch (e) { logger?.warn?.(`[dsh-jiuwen] mapJiuwenFsToDsh deny failed: ${e?.message || e}`) }
     }

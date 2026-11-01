@@ -36,16 +36,29 @@ export function fsRouteHint(serverName = 'dsh-tools') {
   ].join('\n')
 }
 
+/** Per-process record of permissions.tools.update payloads already applied, keyed by `<target>|<tool>`. */
+const sentPermissions = new Map()
+/** Forget what was sent (tests; or after the Gateway target lost its state). */
+export function resetSentPermissions(target) {
+  if (target === undefined) { sentPermissions.clear(); return }
+  for (const k of [...sentPermissions.keys()]) if (k.startsWith(`${target}|`)) sentPermissions.delete(k)
+}
+
 /**
- * Deny Jiuwen side-effecting builtins so the model is forced onto the MCP tools.
- * Fail-soft: missing Gateway method / permission service = no throw.
+ * Deny Jiuwen side-effecting builtins. Each `permissions.tools.update` is sent only when its payload
+ * differs from the last one successfully sent to the same Gateway `target` in this process (many
+ * plugin instances / sessions in one dsh process share it); failures are retried next time.
  */
-export async function denyJiuwenSideEffectTools(rpc, logger) {
+export async function denyJiuwenSideEffectTools(rpc, logger, { target = 'default' } = {}) {
   if (typeof rpc !== 'function') return { ok: false, reason: 'no-rpc' }
   const results = []
   for (const tool of JIUWEN_SIDE_EFFECT_TOOLS) {
+    const key = `${target}|${tool}`
+    const payload = JSON.stringify({ tool, level: 'deny' })
+    if (sentPermissions.get(key) === payload) { results.push({ tool, level: 'deny', cached: true }); continue }
     try {
       await rpc('permissions.tools.update', { tool, level: 'deny' }, { timeoutMs: 10_000 })
+      sentPermissions.set(key, payload)
       results.push({ tool, level: 'deny' })
     } catch (e) {
       logger?.warn?.(`[dsh-jiuwen] mapJiuwenFsToDsh: deny ${tool} failed: ${e?.message || e}`)
