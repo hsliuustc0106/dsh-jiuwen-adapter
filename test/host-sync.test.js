@@ -31,10 +31,11 @@ test('hostSync defaults ON; master off disables children', () => {
 
 test('applySkillBodyInjection soft path once', () => {
   const mapping = { skillBodies: [{ name: 'demo', content: 'Do X' }] }
-  const q1 = applySkillBodyInjection('hello', mapping)
+  const commit = { onInjected: (h) => { mapping.skillInjectHash = h } } // the adapter commits on first Jiuwen event
+  const q1 = applySkillBodyInjection('hello', mapping, commit)
   assert.match(q1, /Host skill: demo/)
   assert.match(q1, /hello/)
-  const q2 = applySkillBodyInjection('hello', mapping)
+  const q2 = applySkillBodyInjection('hello', mapping, commit)
   assert.equal(q2, 'hello')
 })
 

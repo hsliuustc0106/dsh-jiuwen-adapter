@@ -48,6 +48,9 @@ const DEFAULT_MODELS = [
  * @param {{ env?: NodeJS.ProcessEnv, dshHome?: string }} [opts]
  * @returns {ResolvedConfig}
  */
+/** Restricted passthrough set (toolAllowlist: 'core'): generic shell/file IO plus dsh's read-only session-query tools. */
+export const DEFAULT_PASSTHROUGH_TOOLS = Object.freeze(['bash', 'read', 'edit', 'write', 'glob', 'grep', 'session_search', 'session_event_search', 'session_event_read', 'session_trace', 'session_event_trace'])
+
 export function resolveConfig(raw = {}, opts = {}) {
   const env = opts.env ?? process.env
   // Product default is gateway (Jiuwen brain). openai only if explicitly requested.
@@ -152,27 +155,81 @@ export function resolveConfig(raw = {}, opts = {}) {
       : (raw.supportsUserInteraction === false || env.JIUWEN_SUPPORTS_USER_INTERACTION === '0' ? false : 'auto'),
     /** Max wait for a dsh user-questions answer (ms; 0 = no limit). */
     questionTimeoutMs: Number(raw.questionTimeoutMs ?? env.JIUWEN_QUESTION_TIMEOUT_MS ?? 600_000),
-    /** Max wait for a dsh approval decision before denying (ms). */
-    approvalTimeoutMs: Number(raw.approvalTimeoutMs ?? env.JIUWEN_APPROVAL_TIMEOUT_MS ?? 300_000),
+    /**
+     * Optional adapter-side limit on waiting for a dsh decision (permission ask, plan review, SwarmFlow
+     * human turn, legacy 'dsh' gate) before denying (ms). Default 0 = none, as in native dsh: the ask
+     * waits for the user, the dsh turn's abort, or the approval policy (`never` rejects at once).
+     */
+    approvalTimeoutMs: Number(raw.approvalTimeoutMs ?? env.JIUWEN_APPROVAL_TIMEOUT_MS ?? 0),
     /** dsh tools → Jiuwen: 'mcp' (default when hostSync on; allowlisted dsh tools as MCP) | 'off'. */
     toolPassthrough,
-    /** Tool names (exact, prefix*, or '*') exposed when toolPassthrough=mcp. Empty = none. */
-    toolAllowlist: Array.isArray(raw.toolAllowlist) ? raw.toolAllowlist.map(String)
-      : (env.JIUWEN_TOOL_ALLOWLIST ? env.JIUWEN_TOOL_ALLOWLIST.split(',').map(x => x.trim()).filter(Boolean)
-        : ((raw.hostSync === false || env.JIUWEN_HOST_SYNC === '0' || String(env.JIUWEN_TOOL_PASSTHROUGH || raw.toolPassthrough || '').toLowerCase() === 'off') ? [] : ['*'])),
-    /** 'dsh' (default): every passthrough call needs ctx.approval allowed-once (deny when unavailable) | 'none'. */
-    toolApproval: pickEnum(env.JIUWEN_TOOL_APPROVAL || raw.toolApproval, ['dsh', 'none'], 'dsh'),
-    /** Passthrough tools that skip the per-call approval gate: read-only dsh memory/session-query tools (dsh itself never asks for them). */
+    /**
+     * Tool names (exact, prefix*, or '*') exposed when toolPassthrough=mcp. Default ['*']: every host /
+     * plugin tool (as on main). 'core' (string, or an entry in the list) expands to the restricted set:
+     * core shell/file tools, the skill loader and the read-only session tools. With a restricted list,
+     * `toolAllowlistExtra` is added and host-declared tools (`passthrough: true`) still pass. Empty = none.
+     */
+    toolAllowlist: (() => {
+      const off = raw.hostSync === false || env.JIUWEN_HOST_SYNC === '0' || String(env.JIUWEN_TOOL_PASSTHROUGH || raw.toolPassthrough || '').toLowerCase() === 'off'
+      let list = Array.isArray(raw.toolAllowlist) ? raw.toolAllowlist.map(String)
+        : typeof raw.toolAllowlist === 'string' ? raw.toolAllowlist.split(',').map(x => x.trim()).filter(Boolean)
+          : env.JIUWEN_TOOL_ALLOWLIST ? env.JIUWEN_TOOL_ALLOWLIST.split(',').map(x => x.trim()).filter(Boolean)
+            : (off ? [] : ['*'])
+      if (list.includes('*') || !list.length) return list
+      const extra = Array.isArray(raw.toolAllowlistExtra) ? raw.toolAllowlistExtra.map(String) : String(env.JIUWEN_TOOL_ALLOWLIST_EXTRA || '').split(',').map(x => x.trim()).filter(Boolean)
+      const loader = String(raw.skillLoaderTool || env.JIUWEN_SKILL_LOADER_TOOL || 'skill')
+      if (list.includes('core')) list = [...list.filter(x => x !== 'core'), ...DEFAULT_PASSTHROUGH_TOOLS, loader]
+      // hostSkillInject:index needs the loader tool even under a restrictive allowlist (never silent body dump).
+      const hsi = String(env.JIUWEN_HOST_SKILL_INJECT || raw.hostSkillInject || 'index').toLowerCase()
+      if (hsi === 'index' && loader) list = [...list, loader]
+      return [...new Set([...list, ...extra])]
+    })(),
+    /** Honour host-declared passthrough flags on tool schemas (in addition to toolAllowlist). */
+    toolHostDeclared: raw.toolHostDeclared !== false && env.JIUWEN_TOOL_HOST_DECLARED !== '0',
+    /**
+     * How a Jiuwen-issued passthrough call is authorised:
+     *  - 'host' (default): run it through dsh's own tool pipeline (ToolRuntime.execute) so dsh's
+     *    pre-execute policy / sandbox guards / approval policy decide, as for a native call; falls
+     *    back to 'dsh' when the host has no tools runtime with execute() or no live agent.
+     *  - 'dsh': legacy per-call gate: every call needs ctx.approval allowed-once (deny when unavailable).
+     *  - 'none': run the tool definition directly, no approval.
+     */
+    toolApproval: pickEnum(env.JIUWEN_TOOL_APPROVAL || raw.toolApproval, ['host', 'dsh', 'none'], 'host'),
+    /** Tools that skip the legacy per-call gate ('dsh' mode / 'host' fallback): read-only session-query tools and goal CRUD (dsh itself never asks for them). Under 'host' dsh's own policy decides. */
     toolApprovalExempt: Array.isArray(raw.toolApprovalExempt) ? raw.toolApprovalExempt.map(String)
       : env.JIUWEN_TOOL_APPROVAL_EXEMPT !== undefined ? String(env.JIUWEN_TOOL_APPROVAL_EXEMPT).split(',').map(x => x.trim()).filter(Boolean)
-        : ['session_search', 'session_event_search', 'session_event_read', 'session_trace', 'session_event_trace'],
+        : ['session_search', 'session_event_search', 'session_event_read', 'session_trace', 'session_event_trace', 'get_goal', 'update_goal', 'create_goal'],
     mapJiuwenFsToDsh,
+    /**
+     * With dsh tool routing on (mapJiuwenFsToDsh + MCP passthrough), how Jiuwen built-ins that
+     * duplicate a passed-through dsh tool are hidden:
+     *  - 'deny' (default): prompt hint + adapter-decided permission asks (never a dsh card) + owned,
+     *    reversible Jiuwen deny of the delegation built-ins (subagent_spawn / task_tool) when dsh's
+     *    `subagent` is passed through; Jiuwen's own goal is not armed when dsh's goal tools are.
+     *  - 'prompt': the same without the extra Jiuwen deny.
+     *  - 'off': legacy (only bash / write_file / edit_file denied, permission asks become dsh cards).
+     */
+    hideJiuwenBuiltins: pickEnum(env.JIUWEN_HIDE_JIUWEN_BUILTINS || raw.hideJiuwenBuiltins, ['deny', 'prompt', 'off'], 'deny'),
 
-    toolCallTimeoutMs: Number(raw.toolCallTimeoutMs ?? env.JIUWEN_TOOL_CALL_TIMEOUT_MS ?? 120_000),
+    /**
+     * Optional adapter-side cap on one passthrough call (ms). Default 0 = none, as for a native call:
+     * dsh's own per-tool timeout policy bounds the run inside the pipeline, the dsh turn's abort cancels it.
+     */
+    toolCallTimeoutMs: Number(raw.toolCallTimeoutMs ?? env.JIUWEN_TOOL_CALL_TIMEOUT_MS ?? 0),
+    /** Transport deadline of one passthrough call (Jiuwen MCP timeout_s + proxy wait). Unset: caps + 5 s, or 1 h without caps. */
+    mcpCallTimeoutMs: raw.mcpCallTimeoutMs ?? env.JIUWEN_MCP_CALL_TIMEOUT_MS ?? undefined,
     mcpServerName: String(raw.mcpServerName || env.JIUWEN_MCP_SERVER_NAME || 'dsh-tools'),
     /** Shared dir for the stable MCP proxy (schemas.json + ep-<pid>.json). Default ~/.cache/dsh-jiuwen/mcp/<mcpServerName>. */
     mcpStateDir: raw.mcpStateDir || env.JIUWEN_MCP_STATE_DIR || undefined,
     mcpRpcTimeoutMs: Number(raw.mcpRpcTimeoutMs ?? env.JIUWEN_MCP_RPC_TIMEOUT_MS ?? 30_000),
+    /** Release a per-session MCP proxy registration after this long without a turn/tool call (0 = only on session end). */
+    mcpSessionIdleMs: Number(raw.mcpSessionIdleMs ?? env.JIUWEN_MCP_SESSION_IDLE_MS ?? 30 * 60_000),
+    /** On first passthrough turn, delete stale `<mcpServerName>-<sha16>` registrations no live process serves. */
+    mcpGcOnStart: raw.mcpGcOnStart !== false && env.JIUWEN_MCP_GC_ON_START !== '0',
+    /** GC leaves state dirs modified within this window alone (a process may be registering). */
+    mcpGcGraceMs: Number(raw.mcpGcGraceMs ?? env.JIUWEN_MCP_GC_GRACE_MS ?? 120_000),
+    /** Aux calls (compaction, titles): `stable` = one `<jiuwenSessionId>-aux` session per dsh session; `fresh` = new session per call (legacy). */
+    auxSession: (raw.auxSession ?? env.JIUWEN_AUX_SESSION) === 'fresh' ? 'fresh' : 'stable',
     /** Register the `/jiuwen` slash command on ctx.commands when available. */
     registerCommands: raw.registerCommands !== false && env.JIUWEN_REGISTER_COMMANDS !== '0',
     // ── Bridges (sessionSync/planBridge default ON with hostSync; modelDiscovery/typedEvents still opt-in) ──
@@ -226,7 +283,9 @@ export function resolveConfig(raw = {}, opts = {}) {
     /** User-message blocks matching these regexes are not forwarded (default: DSH runtime-context and dsh-time-context snapshots; Jiuwen stamps its own time/runtime). */
     ignoreMessagePatterns: (Array.isArray(raw.ignoreMessagePatterns) ? raw.ignoreMessagePatterns : ['^Current runtime context\\.', '^Time sampled while preparing turn \\d+'])
       .map(p => { try { return new RegExp(String(p), 'm') } catch { return null } }).filter(Boolean),
-    /** Forward the host system prompt to Jiuwen once per session (hash-gated): full (default, whole host prompt, any role) | persona | off. */
+    /** Forward the host system prompt to Jiuwen once per session (hash-gated): full (default; keep for hosts that need the full orchestrator/role prompt) | persona | off (ordinary dsh chats may use persona/off to cut overlap with Jiuwen rails). */
+    /** Optional user-supplied host prompt profile object (persona sections, group events); see host-profiles.js. None by default. */
+    hostProfile: raw.hostProfile && typeof raw.hostProfile === 'object' ? raw.hostProfile : undefined,
     injectSystem: pickEnum(env.JIUWEN_INJECT_SYSTEM || raw.injectSystem, ['off', 'persona', 'full'], 'full'),
     /** Byte cap for the forwarded host system prompt; longer text is cut with an explicit truncation marker. */
     injectSystemMaxBytes: (() => { const n = Number(env.JIUWEN_INJECT_SYSTEM_MAX_BYTES ?? raw.injectSystemMaxBytes); return Number.isFinite(n) && n >= 1024 ? Math.floor(n) : 64 * 1024 })(),
@@ -242,6 +301,36 @@ export function resolveConfig(raw = {}, opts = {}) {
     syncTitle: syncBit('syncTitle', 'JIUWEN_SYNC_TITLE'),
     syncDelete: syncBit('syncDelete', 'JIUWEN_SYNC_DELETE'),
     syncGoal: syncBit('syncGoal', 'JIUWEN_SYNC_GOAL'),
+    /** When the host system prompt changes mid-session: diff (default; resend only changed heading sections when clearly smaller) | full (resend everything). Safety gates (preamble change, reorder, size) still fall back to full. */
+    injectSystemUpdate: pickEnum(env.JIUWEN_INJECT_SYSTEM_UPDATE || raw.injectSystemUpdate, ['diff', 'full'], 'diff'),
+    /**
+     * Optional filters for the forwarded host system prompt, by markdown heading (`#`..`###` line).
+     * Regex strings (or RegExp). Empty allow + empty deny = all sections. Applied before hash/diff.
+     * No built-in denylist. See filterHostSystemSections in system-inject.js.
+     */
+    hostSystemSectionsAllow: (() => {
+      if (Array.isArray(raw.hostSystemSectionsAllow)) return raw.hostSystemSectionsAllow.map(String)
+      const e = env.JIUWEN_HOST_SYSTEM_SECTIONS_ALLOW
+      return e ? String(e).split(',').map(x => x.trim()).filter(Boolean) : []
+    })(),
+    hostSystemSectionsDeny: (() => {
+      if (Array.isArray(raw.hostSystemSectionsDeny)) return raw.hostSystemSectionsDeny.map(String)
+      const e = env.JIUWEN_HOST_SYSTEM_SECTIONS_DENY
+      return e ? String(e).split(',').map(x => x.trim()).filter(Boolean) : []
+    })(),
+    /** Host skills Jiuwen lacks: index (default; name+description once, bodies on demand via skillLoaderTool which is always allowlisted in index mode) | body (explicit inline bodies) | off. Index never silently dumps bodies when the loader is missing — stays index-only. */
+    hostSkillInject: pickEnum(env.JIUWEN_HOST_SKILL_INJECT || raw.hostSkillInject, ['index', 'body', 'off'], 'index'),
+    /** Passthrough host tool that returns a skill body by name (dsh: `skill`). */
+    /** Host skills Jiuwen lacks: forward at most this many per sync, each body capped at skillBodyMaxChars (a truncation marker is appended). */
+    skillSyncMax: Number(raw.skillSyncMax ?? env.JIUWEN_SKILL_SYNC_MAX ?? 20),
+    skillBodyMaxChars: Number(raw.skillBodyMaxChars ?? env.JIUWEN_SKILL_BODY_MAX_CHARS ?? 4000),
+    /** Best-effort secret masking on the skill loader tool's passthrough output. */
+    redactSkillOutput: raw.redactSkillOutput !== false,
+    skillLoaderTool: firstNonEmpty(env.JIUWEN_SKILL_LOADER_TOOL, typeof raw.skillLoaderTool === 'string' ? raw.skillLoaderTool : undefined) || 'skill',
+    /** Per-profile overrides: [{ preset: 'reviewer*', modelName, chatMode, agentTemplateName }] (host agent preset/profile glob; `match` = legacy session-id glob). First match wins; empty by default. */
+    sessionOverrides: (Array.isArray(raw.sessionOverrides) ? raw.sessionOverrides : [])
+      .filter(o => o && (typeof o.match === 'string' || typeof o.preset === 'string'))
+      .map(o => ({ ...(typeof o.match === 'string' ? { match: o.match } : {}), ...(typeof o.preset === 'string' ? { preset: o.preset } : {}), ...(typeof o.modelName === 'string' ? { modelName: o.modelName } : {}), ...(typeof o.chatMode === 'string' ? { chatMode: o.chatMode } : {}), ...(typeof o.agentTemplateName === 'string' ? { agentTemplateName: o.agentTemplateName } : {}) })),
     syncPause: syncBit('syncPause', 'JIUWEN_SYNC_PAUSE'),
     syncPermissions: syncBit('syncPermissions', 'JIUWEN_SYNC_PERMISSIONS'),
     syncFork: syncBit('syncFork', 'JIUWEN_SYNC_FORK'),

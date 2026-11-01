@@ -1,4 +1,4 @@
-// Regressions from a real plain dsh web profile (base + web-app bundles, no FlyBot), 2026-10-31.
+// Regressions from a real plain dsh web profile (base + web-app bundles), 2026-10-31.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
@@ -31,14 +31,14 @@ test('api-session/removed (= session/disposed in dsh) never deletes a session st
   const r = rig({ sessionPersistence: { stat: async id => (stored.has(id) ? { header: {} } : undefined) } })
   for (const id of ['kept', 'gone']) { r.sessions.ensure(id); r.sessions.update(id, { turns: 2 }) }
   r.fire('api-session/removed', 'kept'); r.fire('api-session/removed', 'gone'); await tick(60)
-  assert.equal(r.calls.filter(c => c[0] === 'session.delete').length, 1, 'only the session gone from persistence')
+  assert.equal(r.calls.filter(c => c[0] === 'session.delete' && !String(c[1]?.session_id).endsWith('-aux')).length, 1, 'only the session gone from persistence')
   assert.ok(r.sessions.get('kept'), 'mapping kept'); assert.equal(r.sessions.get('gone'), undefined)
   const e = rig({ sessionPersistence: { stat: async () => { throw new Error('io') } } })
   e.sessions.ensure('s'); e.sessions.update('s', { turns: 1 }); e.fire('api-session/removed', 's'); await tick(60)
   assert.equal(e.calls.length, 0, 'stat error: fail safe, keep'); assert.ok(e.sessions.get('s'))
   const n = rig({}) // no persistence (ephemeral host): previous behaviour
   n.sessions.ensure('s'); n.sessions.update('s', { turns: 1 }); n.fire('api-session/removed', 's'); await tick(60)
-  assert.equal(n.calls.filter(c => c[0] === 'session.delete').length, 1, 'single session.delete (no double call)')
+  assert.equal(n.calls.filter(c => c[0] === 'session.delete' && !String(c[1]?.session_id).endsWith('-aux')).length, 1, 'single session.delete (no double call)')
 })
 
 test('agent-preset scoped skills: serviceFor(agent, "skills") with scope; global registry fallback', async () => {

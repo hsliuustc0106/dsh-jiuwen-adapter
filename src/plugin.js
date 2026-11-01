@@ -1,4 +1,5 @@
 import { appendFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { createPersonaCapture } from './persona-capture.js'
 /**
  * Cordis plugin: registers provider route `jiuwen` on ctx.llm.
@@ -14,7 +15,9 @@ import { GatewayTransport } from './gateway-transport.js'
 import { createInteractor } from './interaction.js'
 import { createBusyRegistry } from './busy-interrupt.js'
 import { createMcpBridge } from './mcp-bridge.js'
-import { denyJiuwenSideEffectTools } from './fs-route.js'
+import { JIUWEN_SIDE_EFFECT_TOOLS, JIUWEN_HIDE_DENY_TOOLS } from './fs-route.js'
+import { createPermissionLedger } from './perm-ledger.js'
+import { createGoalBridge } from './goal-bridge.js'
 import { createJiuwenCommand } from './commands.js'
 import { createFeatureCache } from './features.js'
 
@@ -53,6 +56,8 @@ export function apply(ctx, config = {}) {
     resolved = resolveConfig(config, { dshHome })
     return resolved
   }
+  /** dsh tool routing: Jiuwen file/shell work goes through the dsh passthrough (mapJiuwenFsToDsh + MCP). */
+  const routingOn = (c = readConfig()) => Boolean(c.mapJiuwenFsToDsh && c.toolPassthrough === 'mcp')
 
   const logger = ctx.logger ?? console
   // Warn (never throw) about unknown/misspelled/deprecated keys so a typo cannot silently disable a feature.
@@ -77,6 +82,12 @@ export function apply(ctx, config = {}) {
     services: () => ({ userQuestions: service('userQuestions'), approval: service('approval'), agents: service('agents') }),
     // Subscribed lazily on the first jiuwen question card, so hosts that never see one get no listener.
     onUserMessage: (fn) => ctx.on?.('agent/inbox/inserted', fn, { global: true }),
+    // dsh tool routing for a session: Jiuwen permission asks for hidden duplicate built-ins are decided here.
+    routing: (sid) => {
+      const c = readConfig()
+      if (!routingOn(c)) return { on: false }
+      return { on: true, serverName: mcpBridge.sessionServerName(sid), exposed: mcpBridge.exposed(sid) }
+    },
   })
   const mcpBridge = createMcpBridge({
     config: readConfig,
@@ -84,19 +95,60 @@ export function apply(ctx, config = {}) {
     services: () => ({ tools: service('tools'), approval: service('approval'), agents: service('agents') }),
     rpc: (method, params, opts) => gatewayFor().rpc(method, params, opts),
   })
-  // Once: deny Jiuwen side-effecting builtins so bash/write/edit go through dsh MCP (sandbox/approval/jobs).
-  let fsRouteDenied = false
+  // Jiuwen global tool permissions the adapter owns (perm-ledger.js): with dsh tool routing on, deny
+  // Jiuwen's bash/write_file/edit_file (shell/file IO goes through dsh: sandbox/approval/jobs) and,
+  // with hideJiuwenBuiltins 'deny' and dsh's `subagent` passed through, Jiuwen's delegation
+  // built-ins; with routing off, restore whatever the adapter wrote before. Never stomps a value
+  // someone else changed. Desired entries only grow within a process (sessions differ in tools).
+  const permLedger = createPermissionLedger({
+    file: join(dirname(String(readConfig().mappingPath)), 'jiuwen-permissions.json'),
+    rpc: (method, params, opts) => gatewayFor().rpc(method, params, opts),
+    logger,
+    target: String(readConfig().gatewayURL || 'default'),
+  })
+  const wantDeny = new Set()
+  let permsKey = null
+  let permsRun = null
+  const ensurePermissions = (exposedTools) => {
+    const c = readConfig()
+    if (routingOn(c)) {
+      for (const t of JIUWEN_SIDE_EFFECT_TOOLS) wantDeny.add(t)
+      if (c.hideJiuwenBuiltins === 'deny' && Array.isArray(exposedTools) && exposedTools.includes('subagent')) for (const t of JIUWEN_HIDE_DENY_TOOLS) wantDeny.add(t)
+    } else wantDeny.clear()
+    const desired = Object.fromEntries([...wantDeny].map(t => [t, 'deny']))
+    const key = JSON.stringify(desired)
+    if (key === permsKey) return permsRun
+    permsKey = key
+    // Pre-ledger entries: the routed denies this adapter always wrote (adopted only on the first run).
+    const adopt = Object.fromEntries(JIUWEN_SIDE_EFFECT_TOOLS.map(t => [t, 'deny']))
+    permsRun = permLedger.reconcile(desired, { owner: 'route', adopt }).then((r) => {
+      if (!r.ok) permsKey = null // retry on the next turn
+      if (r.applied?.length || r.released?.length || r.adopted?.length || r.dropped?.length) {
+        logger?.info?.(`[dsh-jiuwen] Jiuwen permissions reconciled: denied=[${r.applied}] restored=[${r.released}] adopted=[${r.adopted}] left-to-user=[${r.dropped}]`)
+      }
+      return r
+    }).catch((e) => { permsKey = null; logger?.warn?.(`[dsh-jiuwen] Jiuwen permission reconcile failed: ${e?.message || e}`) })
+    return permsRun
+  }
   const originalPrepare = mcpBridge.prepare.bind(mcpBridge)
   mcpBridge.prepare = async (...args) => {
     const r = await originalPrepare(...args)
-    if (!fsRouteDenied && readConfig().mapJiuwenFsToDsh) {
-      fsRouteDenied = true
-      try {
-        await denyJiuwenSideEffectTools((method, params, opts) => gatewayFor().rpc(method, params, opts), logger)
-        logger?.info?.('[dsh-jiuwen] mapJiuwenFsToDsh: denied Jiuwen bash/write_file/edit_file (use mcp_dsh-tools_*)')
-      } catch (e) { logger?.warn?.(`[dsh-jiuwen] mapJiuwenFsToDsh deny failed: ${e?.message || e}`) }
-    }
+    if (routingOn()) await ensurePermissions(mcpBridge.exposed(args[1]))
     return r
+  }
+  // Routing off (or toggled off since the last run): restore the adapter's entries at start (background).
+  if (!routingOn() && readConfig().hostSync !== false) {
+    const t = setTimeout(() => { ensurePermissions() }, 1500); t.unref?.()
+  }
+  const goalBridge = createGoalBridge({
+    callTool: (sid, name, args) => mcpBridge.callTool(sid, name, args),
+    exposed: (sid) => mcpBridge.exposed(sid),
+    enabled: () => routingOn() && readConfig().hideJiuwenBuiltins !== 'off',
+    logger,
+  })
+  // Startup GC of stale per-session MCP proxies (background, fail-soft) before the first turn.
+  if (readConfig().toolPassthrough === 'mcp' && readConfig().mcpGcOnStart !== false) {
+    const gcTimer = setTimeout(() => { mcpBridge.startGc().catch?.(() => {}) }, 1000); gcTimer.unref?.()
   }
   // Generic persona source (plain dsh personas); observe-only, off with hostSync:false or injectSystem!=persona.
   let hostSync
@@ -118,6 +170,14 @@ export function apply(ctx, config = {}) {
   const AdapterClass = createJiuwenAdapter(LlmAdapter, {
     busy,
     personaFor: (id) => personaCapture.get(id),
+    // sessionOverrides `preset`: the host agent's preset/profile name (best-effort across host shapes).
+    profileFor: (id) => {
+      let agent
+      try { agent = service('agents')?.get?.(id) } catch { return undefined }
+      const v = agent?.preset?.name ?? agent?.presetName ?? agent?.preset?.id ?? (typeof agent?.preset === 'string' ? agent.preset : undefined)
+        ?? agent?.profile?.name ?? (typeof agent?.profile === 'string' ? agent.profile : undefined)
+      return v === undefined ? undefined : String(v)
+    },
     // Wait (bounded) for host→Jiuwen work a turn depends on: a fork remap, the first skill sync.
     awaitHostSync: async (id) => {
       const p = hostSync?.pendingFor?.(id)
@@ -128,6 +188,7 @@ export function apply(ctx, config = {}) {
     },
     interact,
     mcpBridge,
+    goalBridge,
     // `auto` needs a live answerer, not just the service: headless dsh loads ctx.userQuestions but no
     // client listens on `user-questions/request`, so enabling it there only adds Jiuwen's ask_user
     // tool (~920 input tokens/turn) for questions that are always NO_PROVIDER.
@@ -265,7 +326,7 @@ export function apply(ctx, config = {}) {
     titles.rename(live, title)
     return true
   }
-  const command = createJiuwenCommand({ sessions, gateway: gatewayFor, config: readConfig, mcpBridge, features, localRename })
+  const command = createJiuwenCommand({ sessions, gateway: gatewayFor, config: readConfig, mcpBridge, features, localRename, permLedger: { ...permLedger, release: async (o) => { const r = await permLedger.release(o); permsKey = null; return r } } })
   api.command = command.run
   if (cfg.registerCommands !== false && typeof ctx.inject === 'function') {
     try {
@@ -306,7 +367,7 @@ export function apply(ctx, config = {}) {
     }
     if (cfg.hostSync !== false) {
       disposers.push(hostSync = installHostSync({
-        ctx, config: readConfig, sessions, gateway: gatewayFor, logger, mcpBridge,
+        ctx, config: readConfig, sessions, gateway: gatewayFor, logger, mcpBridge, permLedger,
         services: () => ({
           skills: service('skills'),
           planMode: service('planMode'),

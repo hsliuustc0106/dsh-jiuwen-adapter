@@ -1,8 +1,12 @@
+import { createHash } from 'node:crypto'
+import { resolveHostProfile } from './host-profiles.js'
 /**
  * Host → Jiuwen sync for jiuwen-provider sessions only.
  * Namespaced, fail-soft, feature-detected Gateway methods. Defaults ON via hostSync.
  */
 import { sessionUsesProvider, scopedService } from './bridges.js'
+import { JIUWEN_SIDE_EFFECT_TOOLS } from './fs-route.js'
+import { matchesAllowlist } from './mcp-bridge.js'
 
 const PLAN_CHAT = 'agent.plan'
 /** Jiuwen tools a permission preset touches (never permissions.tools.set). */
@@ -80,7 +84,7 @@ async function rpcOk(gateway, method, params, logger, label) {
  * @param {{ ctx, config: () => object, sessions, gateway: () => object, logger, services: () => object, mcpBridge?: object }} deps
  */
 export function installHostSync(deps) {
-  const { ctx, config, sessions, gateway, logger, services, mcpBridge } = deps
+  const { ctx, config, sessions, gateway, logger, services, mcpBridge, permLedger } = deps
   const offs = []
   let disposed = false
   // Skills/permission syncs are serialized (one socket per RPC would otherwise race: a rapid
@@ -94,6 +98,17 @@ export function installHostSync(deps) {
     if (!session) skillsQueued = run
     return run
   }
+  /**
+   * Jiuwen tools a dsh permission preset may set. With mapJiuwenFsToDsh (default with the MCP
+   * passthrough) Jiuwen's bash / write_file / edit_file are denied and shell/file IO runs through dsh's
+   * own tools, where dsh's preset already applies natively; re-levelling them here (`full-access` →
+   * allow) re-enabled Jiuwen's unsandboxed builtins around dsh's pipeline, and fs-route's per-process
+   * cache then never denied them again.
+   */
+  const presetTools = () => {
+    const c = config() || {}
+    return c.mapJiuwenFsToDsh && c.toolPassthrough === 'mcp' ? PERMISSION_TOOLS.filter(t => !JIUWEN_SIDE_EFFECT_TOOLS.includes(t)) : PERMISSION_TOOLS
+  }
   let permTail = Promise.resolve()
   let permWanted = null
   const queuePermissions = (level) => {
@@ -103,7 +118,17 @@ export function installHostSync(deps) {
     permTail = permTail.then(async () => {
       const lvl = permWanted; permWanted = null
       if (disposed || !lvl) return
-      for (const tool of PERMISSION_TOOLS) await rpcOk(gateway, 'permissions.tools.update', { tool, level: lvl }, logger, 'permissions')
+      const tools = presetTools()
+      // Record what the preset mirror writes (and the level before it) so the adapter can restore
+      // exactly its own global Jiuwen entries later (perm-ledger.js); user values are never adopted.
+      const before = permLedger && tools.length ? (await rpcOk(gateway, 'permissions.tools.get', {}, logger, 'permissions'))?.tools || {} : {}
+      for (const tool of tools) {
+        const r = await rpcOk(gateway, 'permissions.tools.update', { tool, level: lvl }, logger, 'permissions')
+        if (r !== null && permLedger) {
+          const prior = before[tool] && typeof before[tool] === 'object' ? before[tool]['*'] : before[tool]
+          await permLedger.record(tool, lvl, { owner: 'preset', prior: prior ?? null }).catch(e => soft(logger, 'permissions', e))
+        }
+      }
     }).catch(e => soft(logger, 'permissions', e))
     return permTail
   }
@@ -119,6 +144,22 @@ export function installHostSync(deps) {
     goalSent.set(params.session_id, { key, at: now })
     goalLast.set(params.session_id, params.action)
     return rpcOk(gateway, 'command.goal', params, logger, label)
+  }
+  /**
+   * dsh's goal tools (get_goal / update_goal) are passed through to this session's Jiuwen agent:
+   * the goal lives in dsh only. Arming Jiuwen's own goal as well gave two drivers and a one-way
+   * completion (Jiuwen's submit_goal_report completed only Jiuwen's copy; dsh kept driving rounds
+   * until round-limit → blocked). Then only `clear` is forwarded (drops a legacy Jiuwen goal).
+   */
+  const goalRouted = (dshSid) => {
+    const c = config() || {}
+    if (!c.mapJiuwenFsToDsh || c.toolPassthrough !== 'mcp' || (c.hideJiuwenBuiltins || 'deny') === 'off') return false
+    const exposed = mcpBridge?.exposed?.(dshSid)
+    if (Array.isArray(exposed) && exposed.length) return exposed.includes('update_goal')
+    // No turn prepared yet in this session: dsh registers update_goal and the allowlist admits it.
+    let def
+    try { def = services?.()?.tools?.get?.('update_goal') } catch { def = undefined }
+    return Boolean(def) && matchesAllowlist('update_goal', c.toolAllowlist)
   }
   const on = (name, fn) => {
     try {
@@ -226,25 +267,28 @@ export function installHostSync(deps) {
       // skills.list() returns summaries without bodies: load bodies of unknown skills via get().
       const unknown = []
       if (f.syncSkillInstall) {
-        for (const name of enabled.filter(n => !jwNames.has(n)).slice(0, 20)) {
+        const c = config()
+        const maxSkills = posInt(c.skillSyncMax, 20)
+        const maxChars = posInt(c.skillBodyMaxChars, 4000)
+        const missing = enabled.filter(n => !jwNames.has(n))
+        if (missing.length > maxSkills) logger?.info?.(`[dsh-jiuwen] ${missing.length - maxSkills} host skill(s) beyond skillSyncMax=${maxSkills} not forwarded`)
+        for (const name of missing.slice(0, maxSkills)) {
           try {
             const full = typeof reg.get === 'function' ? await reg.get(name, opts) : undefined
             const content = full?.content
-            if (typeof content === 'string' && content.trim()) unknown.push({ name, content: content.slice(0, 4000) })
+            if (typeof content === 'string' && content.trim()) {
+              const description = typeof full?.description === 'string' && full.description.trim() !== content.trim() ? skillDescription(full, content) : ''
+              unknown.push({ name, content: truncateSkillBody(content, maxChars), ...(description ? { description } : {}) })
+            }
           } catch (e) { soft(logger, 'skills.get', e) }
         }
       }
       // Snapshot what we synced last time BEFORE updating (update mutates the mapping in place).
       const prevKnown = Array.isArray(t.mapping?.skills) ? [...t.mapping.skills] : []
-      const prevBodies = JSON.stringify(t.mapping?.skillBodies || [])
       const patch = { skills: known.length ? known : undefined }
-      if (unknown.length) {
-        patch.skillBodies = unknown
-        if (JSON.stringify(unknown) !== prevBodies) patch.skillBodiesInjected = undefined
-      } else {
-        patch.skillBodies = undefined
-        patch.skillBodiesInjected = undefined
-      }
+      // Re-injection is decided by skillInjectHash alone (it covers mode, loader and bodies).
+      patch.skillBodies = unknown.length ? unknown : undefined
+      patch.skillBodiesInjected = undefined // legacy flag from older mappings
       try { sessions.update(t.id, patch) } catch (e) { soft(logger, 'skills.map', e) }
       for (const name of known) {
         if (prevKnown.includes(name)) continue
@@ -344,7 +388,9 @@ export function installHostSync(deps) {
         : op === 'resume' && phase === 'active' ? resumeOrSet(j.mapping.jiuwenSessionId, objective)
         : phase === 'active' && objective ? 'set'
         : null
-      if (action === 'resume') {
+      if (action && action !== 'clear' && goalRouted(j.id)) {
+        soft(logger, 'goal', `dsh goal tools routed; not arming Jiuwen's goal (${action})`)
+      } else if (action === 'resume') {
         sendGoal({ session_id: j.mapping.jiuwenSessionId, action: 'resume' }, 'goal.resume')
       } else if (action === 'set') {
         sendGoal({ session_id: j.mapping.jiuwenSessionId, action: 'set', objective: String(objective) }, 'goal.set')
@@ -376,6 +422,7 @@ export function installHostSync(deps) {
     else if (phase === 'active') action = objective ? 'set' : 'resume'
     else if (objective) action = 'set'
     if (!action) return
+    if (action !== 'clear' && goalRouted(j.id)) return
     const params = { session_id: j.mapping.jiuwenSessionId, action }
     if (action === 'set') params.objective = String(objective)
     sendGoal(params, 'goal/changed')
@@ -435,6 +482,11 @@ export function installHostSync(deps) {
         if ((m.turns || 0) > 0) {
           const g = gateway()
           await (typeof g.sessionDelete === 'function' ? g.sessionDelete(m.jiuwenSessionId) : g.rpc?.('session.delete', { session_id: m.jiuwenSessionId }))
+          // The stable aux session (compaction/titles) goes with its main session; absent = soft error.
+          if (config().auxSession !== 'fresh') {
+            const aux = `${m.jiuwenSessionId}-aux`
+            await Promise.resolve(typeof g.sessionDelete === 'function' ? g.sessionDelete(aux) : g.rpc?.('session.delete', { session_id: aux })).catch(e => soft(logger, 'session.delete.aux', e))
+          }
         }
       } catch (e) { soft(logger, 'session.delete', e) }
       try { sessions.remove(id) } catch (e) { soft(logger, 'unmap', e) }
@@ -493,12 +545,13 @@ export function installHostSync(deps) {
   })
 
   // ── group member changes → force persona reinject (clear systemHash) ──
-  // FlyBot has no stable Cordis event; also clear when session event looks like group roster update.
+  // No stable host event for this: the event types come from the host profile (hostProfile.groupEvents).
   on('session/event', (session, event) => {
-    const f = resolveHostSyncFlags(config())
+    const cfg = config()
+    const f = resolveHostSyncFlags(cfg)
     if (!f.syncGroup) return
     const type = event?.type
-    if (type !== 'plugin:group' && type !== 'group/members' && type !== 'ds-bot/group') return
+    if (!resolveHostProfile(cfg.hostProfile).groupEvents.includes(type)) return
     const j = jiuwenSession(session)
     if (!j) return
     try { sessions.update(j.id, { systemHash: undefined }) } catch (e) { soft(logger, 'group.reinject', e) }
@@ -633,15 +686,71 @@ export function installHostSync(deps) {
   return dispose
 }
 
-/** Soft-inject unknown skill bodies into a chat query (install gap path). */
-export function applySkillBodyInjection(query, mapping) {
+export { redactSecrets } from './redact.js'
+import { redactSecrets } from './redact.js'
+
+const posInt = (v, d) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : d }
+
+/** Cap a host skill body at `max` chars with an explicit marker so the model knows it is partial. */
+export function truncateSkillBody(content, max = 4000) {
+  const s = String(content ?? '')
+  if (!(max > 0) || s.length <= max) return s
+  const marker = `\n…[host skill truncated by dsh-jiuwen adapter: capped at ${max} of ${s.length} chars]`
+  return `${s.slice(0, Math.max(0, max - marker.length))}${marker}`
+}
+
+/** One-line description of a host skill: registry field, else frontmatter `description:`, else first prose line. */
+export function skillDescription(full, content) {
+  const pick = (v) => (typeof v === 'string' && v.trim() ? v.replace(/\s+/g, ' ').trim().slice(0, 240) : '')
+  const d = pick(full?.description) || pick(full?.summary)
+  if (d) return d
+  const text = String(content || '')
+  const fm = /^---\s*\n([\s\S]*?)\n---/.exec(text)
+  const m = fm && /^description:\s*["']?(.+?)["']?\s*$/m.exec(fm[1])
+  if (m) return pick(m[1])
+  const body = fm ? text.slice(fm[0].length) : text
+  const line = body.split('\n').map(l => l.trim()).find(l => l && !/^#/.test(l) && !/^[-*_]{3,}$/.test(l))
+  return pick(line)
+}
+
+export const SKILL_BODY_OPEN = '[Host skill instructions — not installed in Jiuwen; body only]'
+export const SKILL_INDEX_OPEN = '[Host skills available — not installed in Jiuwen; index only]'
+
+/**
+ * Soft-inject host skills Jiuwen does not know (install gap path), once per Jiuwen session and again
+ * only when the set changes (hash-gated, persisted as mapping.skillInjectHash).
+ *  - mode 'body' (explicit): full bodies inline.
+ *  - mode 'index' (default): name + one-line description only; the model loads a body on demand through
+ *    the host's skill tool (opts.loaderTool, e.g. mcp_<server>_skill). Never silently falls back to
+ *    full bodies when the loader is missing — stays index-only and calls opts.onMissingLoader when set.
+ *  - mode 'off': nothing.
+ * Bodies and descriptions are passed through redactSecrets(). Does not mutate `mapping`. Returns the query (unchanged on any error).
+ */
+export function applySkillBodyInjection(query, mapping, opts = {}) {
   try {
     const bodies = mapping?.skillBodies
     if (!Array.isArray(bodies) || !bodies.length) return query
-    if (mapping.skillBodiesInjected) return query
-    const block = bodies.map(b => `### Host skill: ${b.name}\n${b.content}`).join('\n\n')
-    mapping.skillBodiesInjected = true
-    return `[Host skill instructions — not installed in Jiuwen; body only]\n${block}\n[/Host skill instructions]\n\n${query}`
+    // Honour the requested mode exactly: index never silently dumps bodies.
+    const mode = opts.mode === 'index' ? 'index' : (opts.mode === 'off' ? 'off' : 'body')
+    if (mode === 'off') return query
+    if (mode === 'index' && !opts.loaderTool && typeof opts.onMissingLoader === 'function') {
+      try { opts.onMissingLoader() } catch { /* ignore */ }
+    }
+    const sig = createHash('sha256').update(`${mode}\n${opts.loaderTool || ''}\n${JSON.stringify(bodies)}`).digest('hex').slice(0, 16)
+    if (mapping.skillInjectHash === sig) return query
+    let block
+    if (mode === 'index') {
+      const lines = bodies.map(b => `- ${b.name}: ${redactSecrets(b.description || skillDescription(undefined, b.content) || '(no description)')}`)
+      const how = opts.loaderTool
+        ? `When a task matches one, load its full instructions first by calling ${opts.loaderTool} with the skill name, then follow them. Do not load skills that are not relevant.`
+        : 'Bodies are not available on demand (skill loader tool was not passed through this turn). Only this index is injected — set hostSkillInject: body for inline bodies, or ensure skillLoaderTool is present on the host tools list and allowlist.'
+      block = `${SKILL_INDEX_OPEN}\nThese host skills are not installed in Jiuwen. ${how}\n${lines.join('\n')}\n[/Host skills]`
+    } else {
+      block = `${SKILL_BODY_OPEN}\n${bodies.map(b => `### Host skill: ${b.name}\n${redactSecrets(b.content)}`).join('\n\n')}\n[/Host skill instructions]`
+    }
+    // Pure: the caller commits the hash once Jiuwen has accepted the turn (see adapter pendingInjected).
+    if (typeof opts.onInjected === 'function') { try { opts.onInjected(sig, mode) } catch { /* ignore */ } }
+    return `${block}\n\n${query}`
   } catch { return query }
 }
 

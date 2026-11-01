@@ -47,7 +47,7 @@ test('skills: host toggle-off disables the Jiuwen skill we synced; only Jiuwen n
   assert.deepEqual(m.skillBodies, [{ name: 'my-host-skill', content: 'BODY of my-host-skill' }])
   assert.deepEqual(r.calls.filter(c => c[0] === 'skills.toggle').map(c => c[1]), [{ name: 'xlsx', enabled: true }])
   // Body injected once; a changed body re-injects.
-  assert.match(applySkillBodyInjection('q', m), /BODY of my-host-skill/)
+  assert.match(applySkillBodyInjection('q', m, { onInjected: (h) => { m.skillInjectHash = h } }), /BODY of my-host-skill/)
   assert.equal(applySkillBodyInjection('q', m), 'q')
   host = [{ name: 'my-host-skill', invocation: { modelInvocable: true } }]
   services.skills.get = async (n) => ({ name: n, content: 'NEW BODY' })
@@ -56,7 +56,7 @@ test('skills: host toggle-off disables the Jiuwen skill we synced; only Jiuwen n
   m = r.sessions.get('s1')
   assert.equal(m.skills, undefined)
   assert.deepEqual(r.calls.filter(c => c[0] === 'skills.toggle').map(c => c[1]), [{ name: 'xlsx', enabled: false }])
-  assert.match(applySkillBodyInjection('q', m), /NEW BODY/)
+  assert.match(applySkillBodyInjection('q', m, { onInjected: (h) => { m.skillInjectHash = h } }), /NEW BODY/)
 })
 
 test('mcp: hub catalog entries (installed:false) are never forwarded as session mcp names', async () => {

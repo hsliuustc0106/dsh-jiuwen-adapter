@@ -108,8 +108,9 @@ test('session delete during an active first turn: interrupt, wait, then delete t
   r.sessions.recordTurn('d1', {})
   end()
   await tick(30)
-  assert.deepEqual(r.calls.map(c => c[0]), ['chat.interrupt', 'session.delete'])
+  assert.deepEqual(r.calls.map(c => c[0]), ['chat.interrupt', 'session.delete', 'session.delete'])
   assert.equal(r.calls[1][1].session_id, m.jiuwenSessionId)
+  assert.equal(r.calls[2][1].session_id, `${m.jiuwenSessionId}-aux`, 'stable aux session goes with it')
   assert.equal(r.sessions.get('d1'), undefined)
 })
 

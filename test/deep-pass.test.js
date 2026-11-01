@@ -58,7 +58,7 @@ test('G cancel: abort mid-stream is quick; next turn in the same session ok', as
 })
 
 test('J persona: sent once, not resent unchanged, resent on change; non-persona sections dropped; full mode forwards plain prompts', async () => {
-  const h = makeHost(mock, { injectSystem: 'persona' }); const P = n => `# Your identity\nYou are Deep Persona ${n}.\n\n# Tools\nhost tool rules`
+  const h = makeHost(mock, { injectSystem: 'persona', hostProfile: { personaSections: ['^# Identity$'] } }); const P = n => `# Identity\nYou are Deep Persona ${n}.\n\n# Tools\nhost tool rules`
   const m = (p, q) => [{ role: 'system', content: p }, { role: 'user', content: q }]
   await run(h, 'deepJ', m(P('One'), 'TAG:j1 hi')); const s1 = await sent(h, 'deepJ')
   await run(h, 'deepJ', m(P('One'), 'TAG:j2 hi')); const s2 = await sent(h, 'deepJ')

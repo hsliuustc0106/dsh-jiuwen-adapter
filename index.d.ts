@@ -54,6 +54,7 @@ export interface JiuwenAdapterConfig {
   /** @deprecated Put the key in an environment variable and set `apiKeyEnv`. */
   apiKey?: string
   apiKeyEnv?: string
+  /** Optional limit (ms) on waiting for a dsh decision before denying; default 0 = none (native dsh has no approval timeout). */
   approvalTimeoutMs?: number
   authToken?: string
   authorization?: string
@@ -75,12 +76,34 @@ export interface JiuwenAdapterConfig {
   forwardReasoning?: boolean
   gatewayURL?: string
   historyMode?: string
-  /** Forward host system prompt once per Jiuwen session: off | persona (default) | full. Jiuwen sessions only; fail-soft. */
+  /** Forward host system prompt once per Jiuwen session: full (default; keep for full orchestrator/role prompts) | persona | off (ordinary dsh chats may use persona/off to cut overlap with Jiuwen rails). Jiuwen sessions only; fail-soft. */
   injectSystem?: 'off' | 'persona' | 'full'
   /** Byte cap for the forwarded host system prompt (default 65536); longer text gets a truncation marker. */
   injectSystemMaxBytes?: number
+  /** Optional host prompt profile: persona sections for injectSystem 'persona' and group-change event types (none by default). */
+  hostProfile?: { name?: string, personaSections?: Array<string | RegExp>, personaStop?: Array<string | RegExp>, personaAlways?: Array<{ match: string | RegExp, line: string }>, groupEvents?: string[] }
+  /** Mid-session host system prompt change: only changed heading sections (diff, default; safety gates may still send full) or everything (full). */
+  injectSystemUpdate?: 'diff' | 'full'
+  /** Keep only host system sections whose markdown heading matches one of these regexes (empty = no allow filter). Applied before hash/diff. */
+  hostSystemSectionsAllow?: Array<string | RegExp>
+  /** Drop host system sections whose markdown heading matches one of these regexes (empty = no deny filter). Applied after allow. No built-in denylist. */
+  hostSystemSectionsDeny?: Array<string | RegExp>
+  /** Host skills Jiuwen lacks: index (default; name+description, bodies on demand via skillLoaderTool which is always allowlisted) | body (explicit inline) | off. Index never silently dumps bodies. */
+  hostSkillInject?: 'index' | 'body' | 'off'
+  /** Passthrough host tool that loads a skill body by name (default 'skill'). Always passed through under hostSkillInject:index even with a restrictive toolAllowlist. */
+  skillLoaderTool?: string
+  /** Best-effort secret masking of the skill loader tool output (default true). */
+  redactSkillOutput?: boolean
+  /** Max host skills forwarded per sync (default 20). */
+  skillSyncMax?: number
+  /** Max chars per forwarded host skill body; longer bodies get a truncation marker (default 4000). */
+  skillBodyMaxChars?: number
+  /** Per-session overrides by dsh session id glob; first match wins. */
+  sessionOverrides?: Array<{ preset?: string, match?: string, modelName?: string, chatMode?: string, agentTemplateName?: string }>
   /** Route Jiuwen built-in bash/write_file/edit_file to the dsh MCP passthrough tools. */
   mapJiuwenFsToDsh?: boolean
+  /** With dsh tool routing on: how duplicate Jiuwen built-ins are hidden (default 'deny'). */
+  hideJiuwenBuiltins?: 'deny' | 'prompt' | 'off'
   /** Jiuwen steps in reasoning: summary | full (default; structured Markdown). */
   trajectoryDetail?: 'summary' | 'full'
   ignoreMessagePatterns?: Array<string | RegExp>
@@ -94,6 +117,14 @@ export interface JiuwenAdapterConfig {
   llmAdapterModule?: string
   mappingPath?: string
   mcpRpcTimeoutMs?: number
+  /** Release a per-session MCP proxy after this long idle (ms, 0 = only on session end). Default 1800000. */
+  mcpSessionIdleMs?: number
+  /** GC stale `<mcpServerName>-<sha16>` registrations on first passthrough turn. Default true. */
+  mcpGcOnStart?: boolean
+  /** GC skips state dirs modified within this window (ms). Default 120000. */
+  mcpGcGraceMs?: number
+  /** Aux calls (compaction/titles): one stable `<id>-aux` Jiuwen session, or a fresh one per call. Default 'stable'. */
+  auxSession?: 'stable' | 'fresh'
   mcpServerName?: string
   mcpStateDir?: string
   mode?: 'gateway' | 'openai'
@@ -136,10 +167,19 @@ export interface JiuwenAdapterConfig {
   swarmflowStopOnAbort?: boolean
   terminalFinalGraceMs?: number
   titleMode?: string
-  toolAllowlist?: string[]
-  toolApproval?: string
+  /** Default ['*'] (all host tools). 'core' = restricted core set (string or list entry). */
+  toolAllowlist?: string[] | string
+  /** Added to a restricted toolAllowlist (ignored with '*'). */
+  toolAllowlistExtra?: string[]
+  /** Also pass through host tools whose schema sets `passthrough: true` / `meta.jiuwenPassthrough` (default true). */
+  toolHostDeclared?: boolean
+  /** 'host' (default): dsh's own tool pipeline decides | 'dsh': legacy per-call ctx.approval gate | 'none'. */
+  toolApproval?: 'host' | 'dsh' | 'none' | string
   toolApprovalExempt?: string[]
+  /** Optional adapter cap (ms) on one passthrough call; default 0 = none (dsh's per-tool timeout policy applies). */
   toolCallTimeoutMs?: number
+  /** Transport deadline (ms) of one passthrough call: Jiuwen MCP timeout_s + proxy wait. Default: caps + 5 s, or 1 h. */
+  mcpCallTimeoutMs?: number
   toolPassthrough?: boolean
   traceFile?: string
   typedEvents?: boolean

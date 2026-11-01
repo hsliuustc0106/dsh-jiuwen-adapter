@@ -127,11 +127,12 @@ try {
     check('I result returned in Jiuwen answer', /echoed:mcp-ok-77/.test(i1.text || ''), JSON.stringify((i1.text || '').slice(0, 160)))
   }
   if (want('J')) {
-    const sidJ = `deepJ-${ts}`; const P1 = '# Your identity\nYou are Deep Persona One.\n\n# Tools\nhost tool rules'
+    const hj = H({ injectSystem: 'persona', hostProfile: { personaSections: ['^# Identity$'] } })
+    const sidJ = `deepJ-${ts}`; const P1 = '# Identity\nYou are Deep Persona One.\n\n# Tools\nhost tool rules'
     const msgs = (p, q) => [{ role: 'system', content: p }, { role: 'user', content: q }]
-    await h.run(sidJ, msgs(P1, 'TAG:j1 hi'))
-    await h.run(sidJ, msgs(P1, 'TAG:j2 hi'))
-    await h.run(sidJ, msgs('# Your identity\nYou are Deep Persona Two.', 'TAG:j3 hi'))
+    await hj.run(sidJ, msgs(P1, 'TAG:j1 hi'))
+    await hj.run(sidJ, msgs(P1, 'TAG:j2 hi'))
+    await hj.run(sidJ, msgs('# Identity\nYou are Deep Persona Two.', 'TAG:j3 hi'))
     const has = t => standin(t).at(-1)?.persona === true
     check('J persona once, not resent unchanged, resent on change', has('j1') && !has('j2') && has('j3'), `${has('j1')},${has('j2')},${has('j3')}`)
     check('J persona mode drops non-persona sections', standin('j1').at(-1)?.personaText === 'Deep Persona One' && !/host tool rules/.test(standin('j1').at(-1)?.last || ''))

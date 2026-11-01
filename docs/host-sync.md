@@ -1,6 +1,6 @@
 # Host → Jiuwen sync
 
-Everything the dsh / FlyBot frontend can change is forwarded to JiuwenSwarm for **jiuwen-provider sessions only**. Non-jiuwen providers are never touched. Every path is fail-soft and Gateway methods are feature-detected.
+Everything the dsh frontend can change is forwarded to JiuwenSwarm for **jiuwen-provider sessions only**. Non-jiuwen providers are never touched. Every path is fail-soft and Gateway methods are feature-detected.
 
 Master switch: `hostSync` (default **on**). `hostSync: false` or `JIUWEN_HOST_SYNC=0` disables all sync children. Per-feature `sync*` flags default to the master.
 
@@ -16,12 +16,12 @@ Master switch: `hostSync` (default **on**). `hostSync: false` or `JIUWEN_HOST_SY
 | Working directory | `project_dir` / `cwd` on next `chat.send` | `syncWorkDir` |
 | Manual title (`session/title`) | `session.rename` | `syncTitle` |
 | Session delete (`api-session/removed`) | `session.delete` when the mapping had turns, then unmap. During an active turn: `chat.interrupt`, wait (≤15 s), then delete | `syncDelete` |
-| Goal create/pause/resume/clear | `command.goal` (dsh `resume` → `resume` after our `pause`, else `set`) | `syncGoal` |
+| Goal create/pause/resume/clear | `command.goal` (dsh `resume` → `resume` after our `pause`, else `set`). With dsh tool routing and dsh `update_goal` passed through (`hideJiuwenBuiltins` ≠ `off`) only `clear` is forwarded: the model works the dsh goal through `get_goal` / `update_goal`, and a Jiuwen `submit_goal_report complete` / `blocked` is mirrored onto dsh `update_goal` in the same turn | `syncGoal` |
 | Host pause (`workspace/session-stop`) | `chat.interrupt` cancel | `syncPause` |
-| Permission preset (safe map) | `permissions.tools.update` on `bash`/`write_file`/`edit_file` — never `set-all`. The session's first (seeded default) preset is a baseline and is not forwarded; only later changes are | `syncPermissions` |
+| Permission preset (safe map) | `permissions.tools.update` on `bash`/`write_file`/`edit_file` — never `set-all`. The session's first (seeded default) preset is a baseline and is not forwarded; only later changes are. With `mapJiuwenFsToDsh` (default with the MCP passthrough) these builtins stay denied and are skipped — shell/file IO runs through dsh's tools, where the dsh preset applies natively. Every write is recorded in the adapter's permission ledger with the prior value (see [configuration.md](./configuration.md#jiuwen-global-permissions-adapter-owned-ledger)) | `syncPermissions` |
 | Session fork (`header.parentSession`) | `session.fork` + remap child (turns/options copied; subagent children are not forked) | `syncFork` |
-| Group member change | Clears `systemHash` so persona reinjects on next turn | `syncGroup` |
-| dsh persona sections | Read-only `system-prompt/assemble` listener remembers `deployment:persona-prefix/suffix` per session for `injectSystem: persona` (plain dsh, no FlyBot markers); returns the assembly untouched | `hostSync` + `injectSystem: persona` |
+| Group member change | Clears `systemHash` so persona reinjects on next turn, for the `session/event` types listed in `hostProfile.groupEvents` (none by default) | `syncGroup` |
+| dsh persona sections | Read-only `system-prompt/assemble` listener remembers `deployment:persona-prefix/suffix` per session for `injectSystem: persona` (plain dsh; or a `hostProfile` object); returns the assembly untouched | `hostSync` + `injectSystem: persona` |
 | Schedule change (session `schedule/change`, `every`) | `heartbeat.set_conf` merged onto the current conf (global; Jiuwen has no per-session interval) | `syncSchedule` |
 
 Skill and permission syncs are serialized and latest-wins, so rapid toggles cannot land out of order. Skill sync makes no Gateway call when no jiuwen session exists.

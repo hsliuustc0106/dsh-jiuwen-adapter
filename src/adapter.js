@@ -216,10 +216,27 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
               overrides.mcp = [...(overrides.mcp || []), ...mapping.mcpNames]
             }
           }
+          // sessionOverrides: per-profile defaults (host agent preset / profile, or a session-id glob).
+          // Precedence: request > catalog model > /jiuwen mode|model (mapping) > sessionOverrides > plugin defaults.
+          {
+            let profile
+            try { profile = deps.profileFor?.(dshSessionId) } catch { profile = undefined }
+            const so = matchSessionOverride(cfg.sessionOverrides, dshSessionId, profile)
+            if (so) {
+              const req = options?.providerOptions?.jiuwen || options?.metadata?.jiuwen || options?.jiuwen || {}
+              const catalog = cfg.models.find(m => m.id === options?.model)
+              const explicit = (k) => req[k] !== undefined || catalog?.[k] !== undefined || mapping[k] !== undefined
+              if (so.modelName && !explicit('modelName') && !(cfg.forwardModelName && options?.model && !catalog) && !(cfg.discoveryPrefix && String(options?.model || '').startsWith(cfg.discoveryPrefix))) overrides.modelName = so.modelName
+              if (so.chatMode && !explicit('chatMode')) overrides.chatMode = so.chatMode
+              if (so.agentTemplateName && !explicit('agentTemplateName')) overrides.agentTemplateName = so.agentTemplateName
+            }
+          }
           if (overrides.supportsUserInteraction === 'auto') overrides.supportsUserInteraction = Boolean(deps.hasUserQuestions?.())
-          // Auxiliary calls (compaction, jiuwen titles) use a throwaway Jiuwen session + full transcript.
+          // Auxiliary calls (compaction, jiuwen titles) run in a separate Jiuwen session with the full
+          // transcript, isolated from the main one: one stable `<id>-aux` per dsh session (default) or a
+          // fresh one per call (auxSession: 'fresh'). The stable one is deleted with the main session.
           const aux = Boolean(options.purpose)
-          const turnMapping = aux ? { ...mapping, jiuwenSessionId: `${mapping.jiuwenSessionId}-aux-${Date.now().toString(36)}`, turns: 0 } : mapping
+          const turnMapping = aux ? { ...mapping, jiuwenSessionId: auxSessionId(mapping.jiuwenSessionId, cfg.auxSession), turns: 0 } : mapping
           if (aux) overrides.historyMode = 'transcript'
           let query = buildQuery(options, turnMapping, cfg, overrides)
           // Interrupt-on-busy: the previous turn was cut by a new user message → say so (once), before system injection.
@@ -235,39 +252,59 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
             }
           }
           // injectSystem (jiuwen sessions only; fail soft). Skipped for aux calls and ask_user answers.
-          let systemHash
+          let systemHash, systemSections, skillInjectHash, fsRouteHash
       if (!aux && cfg.injectSystem !== 'off' && !turnMapping.pendingQuestion) {
-            const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId), cfg.injectSystemMaxBytes)
-            query = inj.query; systemHash = inj.hash
-            if (inj.hash) makeTrace(cfg.traceFile)({ at: 'system-inject', dshSessionId, mode: cfg.injectSystem, bytes: inj.bytes, updated: inj.updated, hash: inj.hash })
+            const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId), cfg.injectSystemMaxBytes, cfg.injectSystemUpdate, cfg.hostProfile, { allow: cfg.hostSystemSectionsAllow, deny: cfg.hostSystemSectionsDeny })
+            query = inj.query; systemHash = inj.hash; systemSections = inj.sections
+            if (inj.hash) makeTrace(cfg.traceFile)({ at: 'system-inject', dshSessionId, mode: cfg.injectSystem, bytes: inj.bytes, updated: inj.updated, hash: inj.hash, ...(inj.delta ? { delta: true, fullBytes: inj.fullBytes } : {}) })
           }
           const trace = makeTrace(cfg.traceFile)
           let mcpName = cfg.mcpServerName
           let mcpAttached = false
           if (!aux && cfg.toolPassthrough === 'mcp' && deps.mcpBridge && options.tools?.length) {
-            const r = await deps.mcpBridge.prepare(options.tools, dshSessionId)
+            const r = await deps.mcpBridge.prepare(options.tools, dshSessionId, { signal: options.signal })
             mcpName = r?.mcpServerName || cfg.mcpServerName
             trace({ at: 'mcp-passthrough', exposed: deps.mcpBridge.exposed?.(dshSessionId) ?? deps.mcpBridge.exposed(), mcpServerName: mcpName, error: r?.error })
             if (r && !r.error) { overrides.mcp = [...(overrides.mcp || []), mcpName]; mcpAttached = true }
           }
           // Only point the model at mcp_<server>_* when the passthrough server is actually attached this turn.
           if (!aux && cfg.mapJiuwenFsToDsh && mcpAttached && !turnMapping.pendingQuestion) {
-            const fs = applyFsRouteInjection(query, turnMapping, true, mcpName)
+            const fs = applyFsRouteInjection(query, turnMapping, true, mcpName, deps.mcpBridge.exposed?.(dshSessionId), cfg.hideJiuwenBuiltins)
             query = fs.query
-            if (fs.hash) turnMapping.fsRouteHash = fs.hash
+            if (fs.hash) fsRouteHash = fs.hash
           }
+          const exposedNow = mcpAttached ? (deps.mcpBridge.exposed?.(dshSessionId) || []) : []
           if (!aux && cfg.syncSkillInstall !== false && turnMapping.skillBodies?.length) {
-            query = applySkillBodyInjection(query, turnMapping)
+            const loader = cfg.skillLoaderTool && exposedNow.includes(cfg.skillLoaderTool) ? `mcp_${mcpName}_${cfg.skillLoaderTool}` : undefined
+            query = applySkillBodyInjection(query, turnMapping, { mode: cfg.hostSkillInject, loaderTool: loader,
+              onMissingLoader: () => {
+                deps.logger?.warn?.(`[dsh-jiuwen] hostSkillInject:index — skill loader tool "${cfg.skillLoaderTool || 'skill'}" not passed through; injecting index-only (no silent body fallback). Set hostSkillInject: body for inline bodies.`)
+                trace({ at: 'skill-inject', warn: 'index-without-loader', dshSessionId, skillLoaderTool: cfg.skillLoaderTool || 'skill' })
+              },
+              onInjected: (h, mode) => { skillInjectHash = h; trace({ at: 'skill-inject', dshSessionId, mode, skills: turnMapping.skillBodies.length, hash: h, loader: Boolean(loader) }) } })
           }
           trace({ at: 'turn-start', dshSessionId, jiuwen: turnMapping.jiuwenSessionId, purpose: options.purpose, query: query.slice(0, 500), messages: (options.messages || []).length,
             blocks: JSON.stringify((options.messages || []).flatMap(m => Array.isArray(m.content) ? m.content.filter(b => b?.type !== 'text') : [])).slice(0, 1500) })
           let recorded = false
+          // Everything injected into this query (system block, FS hint, skill index/bodies) is pending
+          // until Jiuwen shows it accepted the turn (first event) and is then committed together, so a
+          // failed send never marks an injection as delivered and nothing is committed piecemeal.
+          let committed = aux
+          const commitInjected = () => {
+            if (committed) return
+            committed = true
+            const patch = { ...(systemHash ? { systemHash, systemSections } : {}), ...(skillInjectHash ? { skillInjectHash } : {}), ...(fsRouteHash ? { fsRouteHash } : {}) }
+            if (Object.keys(patch).length) { try { deps.sessions.update?.(dshSessionId, patch) } catch { /* ignore */ } }
+          }
           const endTurn = aux ? () => {} : (deps.sessions.beginTurn?.(dshSessionId) || (() => {}))
           const busy = !aux && deps.busy && cfg.onBusyMessage === 'interrupt' ? deps.busy.begin(dshSessionId) : undefined
           if (busy) { busy.userText = busyText; busy.userCount = busyCount }
           try {
           request = { ...request, messages: options.messages }
-          yield *this._gatewayTransport().stream(request, turnMapping, {
+          // Goal bridge (Jiuwen submit_goal_report → dsh update_goal): finish the update while this
+          // dsh turn is still open, i.e. before passing the turn's `finish` on.
+          const goalUpdates = new Set()
+          const gwStream = this._gatewayTransport().stream(request, turnMapping, {
             query,
             mark: (name) => trace({ at: 'mark', name }),
             traceParams: (p) => trace({ at: 'params', params: { ...p, content: undefined, query: String(p.query).slice(0, 300) } }),
@@ -280,6 +317,10 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
               try { return await deps.interact({ ...q, told: overrides.supportsUserInteraction === true }, dshSessionId) } finally { deps.busy?.setAwaiting(dshSessionId, null) }
             } } : {}),
             onEvent: (e) => {
+              commitInjected()
+              if (!aux && deps.goalBridge) {
+                try { const p = deps.goalBridge.observe(dshSessionId, e); if (p) { goalUpdates.add(p); p.finally(() => goalUpdates.delete(p)) } } catch { /* ignore */ }
+              }
               trace({ at: 'event', type: e.type, name: e.name, event: e.event, ...(e.type === 'interaction_answered' ? { eventType: e.eventType, source: e.source, outcome: e.outcome, raw: JSON.stringify(e.raw).slice(0, 1500) } : {}) })
               try { overrides.onEvent?.(e) } catch { /* ignore */ }
               try { deps.onEvent?.({ dshSessionId, ...e }) } catch { /* ignore */ }
@@ -288,13 +329,18 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
               trace({ at: 'turn-end', reason: info.reason, chars: info.text?.length, ...(info.interrupted ? { interrupted: true } : {}) })
               recorded = true
               if (!aux && (info.reason?.kind === 'stop' || info.reason?.kind === 'aborted')) {
-                deps.sessions.recordTurn?.(dshSessionId, { requestId: info.requestId, pendingQuestion: info.pendingQuestion, ...(systemHash ? { systemHash } : {}) })
+                commitInjected()
+                deps.sessions.recordTurn?.(dshSessionId, { requestId: info.requestId, pendingQuestion: info.pendingQuestion })
               }
               // Turns usually end on the terminal chat.final grace, before Gateway's processing_status
               // {is_complete} arrives, so bridges (planBridge) key off this explicit turn_end event.
               if (!aux) { try { deps.onEvent?.({ dshSessionId, type: 'turn_end', sessionId: turnMapping.jiuwenSessionId, requestId: info.requestId, reason: info.reason }) } catch { /* ignore */ } }
             },
           })
+          for await (const chunk of gwStream) {
+            if (chunk?.type === 'finish' && goalUpdates.size) await Promise.allSettled([...goalUpdates])
+            yield chunk
+          }
           } finally {
             // Host may stop iterating right after abort; Jiuwen already holds the user message.
             if (!recorded && !aux && options.signal?.aborted) {
@@ -352,6 +398,11 @@ export function turnOverrides(cfg, options) {
     ...(modelName ? { modelName } : {}),
     ...(typeof req.onEvent === 'function' ? { onEvent: req.onEvent } : {}),
   }
+}
+
+/** Jiuwen session id for aux calls (compaction/titles) of one main Jiuwen session. */
+export function auxSessionId(jiuwenSessionId, mode = 'stable') {
+  return mode === 'fresh' ? `${jiuwenSessionId}-aux-${Date.now().toString(36)}` : `${jiuwenSessionId}-aux`
 }
 
 /**
@@ -522,4 +573,21 @@ export async function loadJiuwenAdapterClass() {
   } catch {
     return createJiuwenAdapter(null, deps)
   }
+}
+
+const globRe = (g) => new RegExp(`^${String(g).split('*').map(x => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`)
+/**
+ * First sessionOverrides entry that matches. An entry may set `preset` (glob on the host agent
+ * preset / profile name, preferred) and/or `match` (glob on the dsh session id, legacy); every key
+ * it sets must match. Entries with neither never match.
+ */
+export function matchSessionOverride(list, id, profile) {
+  if (!Array.isArray(list) || !list.length || !id) return undefined
+  for (const o of list) {
+    if (!o || (typeof o.preset !== 'string' && typeof o.match !== 'string')) continue
+    if (typeof o.preset === 'string' && !(profile && globRe(o.preset).test(String(profile)))) continue
+    if (typeof o.match === 'string' && !globRe(o.match).test(String(id))) continue
+    return o
+  }
+  return undefined
 }

@@ -4,12 +4,12 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
-import { createMcpBridge, matchesAllowlist, proxyRegistration, isProxyConnected, sessionMcpName, schemasRev, PROXY_PATH } from '../src/mcp-bridge.js'
+import { createMcpBridge, matchesAllowlist, proxyRegistration, isProxyConnected, sessionMcpName, schemasRev, PROXY_PATH, mcpCallTimeoutMs } from '../src/mcp-bridge.js'
 
 const tmp = mkdtempSync(join(tmpdir(), 'jw-mcp-test-'))
 process.on('exit', () => rmSync(tmp, { recursive: true, force: true }))
 
-const base = { toolAllowlist: ['read', 'web_*', 'orchestrator_report'], toolApproval: 'dsh', approvalTimeoutMs: 200, toolCallTimeoutMs: 1000, mcpServerName: 'dsh-tools', mcpStateDir: join(tmp, 'state'), jiuwenMcpStateFile: join(tmp, 'jiuwen-state.json') }
+const base = { toolAllowlist: ['read', 'web_*', 'orchestrator_report'], toolApproval: 'dsh', approvalTimeoutMs: 200, toolCallTimeoutMs: 1000, mcpServerName: 'dsh-tools', mcpStateDir: join(tmp, 'state'), jiuwenMcpStateFile: join(tmp, 'jiuwen-state.json'), mcpGcOnStart: false }
 function bridge(services, cfg = {}) {
   const calls = []
   const b = createMcpBridge({ config: () => ({ ...base, ...cfg }), services: () => services, rpc: async (m, p) => { calls.push([m, p]); return {} } })
@@ -55,7 +55,7 @@ test('registers a per-session stdio proxy; dispose never disconnects; reconnect 
   assert.equal(calls.length, 2, 'no mcp.disconnect / delete_custom on dispose')
   assert.ok(!existsSync(ep))
   // Next prepare with connected record at the same revision → reuse
-  const reg = proxyRegistration(name, stateDir, 1000, schemasRev(union()))
+  const reg = proxyRegistration(name, stateDir, mcpCallTimeoutMs(base), schemasRev(union()))
   writeFileSync(join(tmp, 'jiuwen-state.json'), JSON.stringify({ mcp: { [name]: { ...reg, state: 'connected' } } }))
   assert.ok(isProxyConnected({ ...reg, state: 'connected' }, reg))
   const next = bridge({})
@@ -224,15 +224,19 @@ test('verify: mcp.show resolves the custom passthrough server', async () => {
 test('memory plugins: read-only session-query tools skip the per-call approval gate (dsh never asks for them); others still gated', async () => {
   const { resolveConfig } = await import('../src/config.js')
   const def = resolveConfig({}, { env: {} }).toolApprovalExempt
-  assert.deepEqual(def, ['session_search', 'session_event_search', 'session_event_read', 'session_trace', 'session_event_trace'])
+  assert.deepEqual(def, ['session_search', 'session_event_search', 'session_event_read', 'session_trace', 'session_event_trace', 'get_goal', 'update_goal', 'create_goal'])
   assert.deepEqual(resolveConfig({}, { env: { JIUWEN_TOOL_APPROVAL_EXEMPT: '' } }).toolApprovalExempt, [])
   const agent = { id: 's1' }; let asked = 0
   const tools = { get: (n) => ({ execute: async (args, exec) => ({ content: [{ type: 'text', text: `ran ${n} agent=${exec.agent?.id}` }] }) }) }
-  const mem = [...schemas, { name: 'session_search', description: 's', parameters: { type: 'object' } }]
+  const mem = [...schemas, { name: 'session_search', description: 's', parameters: { type: 'object' } }, { name: 'get_goal', description: 'g', parameters: { type: 'object' } }, { name: 'update_goal', description: 'u', parameters: { type: 'object' } }, { name: 'create_goal', description: 'c', parameters: { type: 'object' } }]
   const b1 = bridge({ tools, agents: { get: () => agent }, approval: { request: async () => { asked++; return 'rejected' } } }, { toolAllowlist: ['*'], toolApprovalExempt: def })
   await b1.b.prepare(mem, 's1')
   let r = await b1.b._handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'session_search', arguments: { query: 'zebra' } } })
   assert.equal(r.result.isError, false); assert.equal(r.result.content[0].text, 'ran session_search agent=s1'); assert.equal(asked, 0)
+  for (const goalTool of ['get_goal', 'update_goal', 'create_goal']) {
+    r = await b1.b._handle({ jsonrpc: '2.0', id: goalTool, method: 'tools/call', params: { name: goalTool, arguments: {} } })
+    assert.equal(r.result.isError, false, `${goalTool} should skip approval`); assert.equal(r.result.content[0].text, `ran ${goalTool} agent=s1`); assert.equal(asked, 0)
+  }
   r = await b1.b._handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'bash', arguments: {} } })
   assert.equal(r.result.isError, true); assert.equal(asked, 1, 'non-exempt tool still asks')
   await b1.b.dispose()
@@ -240,7 +244,149 @@ test('memory plugins: read-only session-query tools skip the per-call approval g
   await b2.b.prepare(mem, 's1')
   r = await b2.b._handle({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'session_search', arguments: {} } })
   assert.equal(r.result.isError, true, 'empty exempt list restores the old gate')
+  r = await b2.b._handle({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'get_goal', arguments: {} } })
+  assert.equal(r.result.isError, true, 'empty exempt list still gates get_goal')
   await b2.b.dispose()
+})
+
+test('hostSkillInject:index force-includes skillLoaderTool even when allowlist excludes it', async () => {
+  const tools = [...schemas, { name: 'skill', description: 'load skill body' }]
+  const { b } = bridge({}, { toolAllowlist: ['read'], hostSkillInject: 'index', skillLoaderTool: 'skill' })
+  await b.prepare(tools, 'idx')
+  assert.deepEqual(b.exposed('idx').sort(), ['read', 'skill'])
+  await b.dispose()
+  const body = bridge({}, { toolAllowlist: ['read'], hostSkillInject: 'body', skillLoaderTool: 'skill' })
+  await body.b.prepare(tools, 'body')
+  assert.deepEqual(body.b.exposed('body'), ['read'], 'body mode does not force-include loader')
+  await body.b.dispose()
+})
+
+// ── toolApproval: 'host' (default) — passthrough runs through dsh's own tool pipeline ──
+const hostRuntime = (impl) => {
+  const seen = []
+  return { seen, get: (n) => ({ name: n, execute: async () => { throw new Error('def.execute must not be called directly in host mode') } }),
+    execute: async (exec) => { seen.push(exec); return impl(exec) } }
+}
+
+test('host (default): passthrough goes through tools.execute; no adapter approval gate (policy never still runs allowed tools)', async () => {
+  const { resolveConfig } = await import('../src/config.js')
+  assert.equal(resolveConfig({}, { env: {} }).toolApproval, 'host')
+  assert.equal(resolveConfig({}, { env: { JIUWEN_TOOL_APPROVAL: 'dsh' } }).toolApproval, 'dsh')
+  assert.equal(resolveConfig({ toolApproval: 'none' }, { env: {} }).toolApproval, 'none')
+  const agent = { id: 's1' }; let asked = 0
+  const rt = hostRuntime((exec) => ({ isError: false, content: [{ type: 'text', text: `ran ${exec.name} ${JSON.stringify(exec.arguments)}` }] }))
+  const { b } = bridge({ tools: rt, agents: { get: () => agent }, approval: { request: async () => { asked++; return 'rejected' } } }, { toolApproval: undefined, toolAllowlist: ['*'] })
+  await b.prepare([...schemas, { name: 'write', description: 'w' }], 's1')
+  const r = await b._handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'write', arguments: { path: 'a.txt' } } }, 's1')
+  assert.equal(r.result.isError, false, r.result.content[0].text)
+  assert.equal(r.result.content[0].text, 'ran write {"path":"a.txt"}')
+  assert.equal(asked, 0, 'adapter never asks itself under host mode')
+  const ex = rt.seen[0]
+  assert.equal(ex.name, 'write'); assert.equal(ex.agent, agent); assert.deepEqual(ex.arguments, { path: 'a.txt' })
+  assert.match(ex.callId, /^jiuwen-[0-9a-f-]{36}$/)
+  assert.ok(ex.signal instanceof AbortSignal && !ex.signal.aborted)
+  await b.dispose()
+})
+
+test('host: dsh pipeline denial / error results pass through as isError (dsh decides, never fails open)', async () => {
+  const agent = { id: 's1' }
+  const rt = hostRuntime((exec) => exec.name === 'bash'
+    ? { isError: true, content: [{ type: 'text', text: 'Error: the user rejected tool "bash"' }], error: { message: 'the user rejected tool "bash"' } }
+    : Promise.reject(new Error('boom')))
+  const { b } = bridge({ tools: rt, agents: { get: () => agent } }, { toolApproval: 'host', toolAllowlist: ['*'] })
+  await b.prepare(schemas, 's1')
+  let r = await b._handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'bash', arguments: { command: 'ls' } } }, 's1')
+  assert.equal(r.result.isError, true); assert.match(r.result.content[0].text, /user rejected tool "bash"/)
+  r = await b._handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'read', arguments: {} } }, 's1')
+  assert.equal(r.result.isError, true); assert.match(r.result.content[0].text, /dsh tool read failed: boom/)
+  r = await b._handle({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'not_admitted', arguments: {} } }, 's1')
+  assert.equal(r.result.isError, true); assert.match(r.result.content[0].text, /not exposed/)
+  assert.equal(rt.seen.length, 2, 'non-admitted tool never reaches dsh')
+  await b.dispose()
+})
+
+test('host: falls back to the legacy per-call gate without a runtime execute() or a live agent; toolApprovalExempt still applies there', async () => {
+  const agent = { id: 's1' }; const asked = []
+  const legacy = { get: (n) => ({ execute: async () => `direct ${n}` }) }
+  const fb = bridge({ tools: legacy, agents: { get: () => agent }, approval: { request: async (r) => { asked.push(r.toolName); return 'allowed-once' } } }, { toolApproval: 'host', toolAllowlist: ['*'], toolApprovalExempt: ['read'] })
+  await fb.b.prepare(schemas, 's1')
+  let r = await fb.b._handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'bash', arguments: {} } }, 's1')
+  assert.equal(r.result.content[0].text, 'direct bash'); assert.deepEqual(asked, ['bash'])
+  r = await fb.b._handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'read', arguments: {} } }, 's1')
+  assert.equal(r.result.content[0].text, 'direct read'); assert.deepEqual(asked, ['bash'], 'exempt tool skips the fallback gate')
+  await fb.b.dispose()
+  // runtime present but no agent → fallback gate denies (no approval channel for an agent-less call)
+  const rt = hostRuntime(() => ({ content: [{ type: 'text', text: 'host' }] }))
+  const na = bridge({ tools: rt, agents: { get: () => undefined }, approval: { request: async () => 'allowed-once' } }, { toolApproval: 'host', toolAllowlist: ['*'] })
+  await na.b.prepare(schemas, 's2')
+  r = await na.b._handle({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'bash', arguments: {} } }, 's2')
+  assert.equal(r.result.isError, true); assert.match(r.result.content[0].text, /denied bash \(unavailable\)/)
+  assert.equal(rt.seen.length, 0)
+  await na.b.dispose()
+})
+
+test("toolApproval 'dsh' keeps the legacy gate even when the runtime has execute(); 'none' runs the definition directly", async () => {
+  const agent = { id: 's1' }; let asked = 0
+  const direct = []
+  const rt = { get: (n) => ({ execute: async () => { direct.push(n); return `direct ${n}` } }), execute: async () => { throw new Error('pipeline must not run') } }
+  const d = bridge({ tools: rt, agents: { get: () => agent }, approval: { request: async () => { asked++; return 'rejected' } } }, { toolApproval: 'dsh', toolAllowlist: ['*'], toolApprovalExempt: [] })
+  await d.b.prepare(schemas, 's1')
+  let r = await d.b._handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'bash', arguments: {} } }, 's1')
+  assert.equal(r.result.isError, true); assert.match(r.result.content[0].text, /dsh denied bash \(rejected\)/); assert.equal(asked, 1)
+  await d.b.dispose()
+  const n = bridge({ tools: rt, agents: { get: () => agent }, approval: { request: async () => { asked++; return 'rejected' } } }, { toolApproval: 'none', toolAllowlist: ['*'] })
+  await n.b.prepare(schemas, 's1')
+  r = await n.b._handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'bash', arguments: {} } }, 's1')
+  assert.equal(r.result.content[0].text, 'direct bash'); assert.equal(asked, 1)
+  await n.b.dispose()
+})
+
+test('host: the call budget (toolCallTimeoutMs + approvalTimeoutMs) aborts exec.signal; Jiuwen registration timeout covers it', async () => {
+  const agent = { id: 's1' }
+  const rt = hostRuntime((exec) => new Promise((res) => exec.signal.addEventListener('abort', () => res({ isError: true, content: [{ type: 'text', text: 'Error: aborted' }] }))))
+  const { b, calls } = bridge({ tools: rt, agents: { get: () => agent } }, { toolApproval: 'host', toolAllowlist: ['*'], toolCallTimeoutMs: 60, approvalTimeoutMs: 40 })
+  await b.prepare(schemas, 's-budget')
+  const reg = calls.find(c => c[0] === 'mcp.register_custom')[1]
+  assert.equal(reg.timeout_s, Math.ceil((60 + 40 + 5000) / 1000))
+  const t0 = Date.now()
+  const r = await b._handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'read', arguments: {} } }, 's-budget')
+  assert.equal(r.result.isError, true)
+  assert.ok(Date.now() - t0 >= 90, 'budget includes the approval window')
+  assert.ok(rt.seen[0].signal.aborted)
+  await b.dispose()
+  const none = bridge({}, { toolApproval: 'none', toolCallTimeoutMs: 120_000, approvalTimeoutMs: 300_000 })
+  await none.b.prepare(schemas, 's-none')
+  assert.equal(none.calls.find(c => c[0] === 'mcp.register_custom')[1].timeout_s, 125)
+  await none.b.dispose()
+})
+
+test('host: skill loader output is still redacted', async () => {
+  const agent = { id: 's1' }
+  const secret = 'sk-' + 'a'.repeat(40)
+  const rt = hostRuntime(() => ({ content: [{ type: 'text', text: `body key=${secret}` }] }))
+  const { b } = bridge({ tools: rt, agents: { get: () => agent } }, { toolApproval: 'host', toolAllowlist: ['*'], skillLoaderTool: 'skill' })
+  await b.prepare([{ name: 'skill', description: 's' }], 's1')
+  const r = await b._handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'skill', arguments: { name: 'x' } } }, 's1')
+  assert.equal(r.result.isError, false)
+  assert.ok(!r.result.content[0].text.includes(secret))
+  await b.dispose()
+})
+
+test('prepare([]) (host-sync "ensure proxy") keeps the admitted schemas: tools/call still works afterwards', async () => {
+  const agent = { id: 's1' }
+  const rt = hostRuntime((exec) => ({ content: [{ type: 'text', text: `ran ${exec.name}` }] }))
+  const { b } = bridge({ tools: rt, agents: { get: () => agent } }, { toolApproval: 'host' })
+  await b.prepare(schemas, 's-keep')
+  assert.deepEqual(b.exposed('s-keep'), ['read', 'web_fetch', 'orchestrator_report'])
+  await b.prepare([], 's-keep')
+  assert.deepEqual(b.exposed('s-keep'), ['read', 'web_fetch', 'orchestrator_report'])
+  const r = await b._handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'read', arguments: {} } }, 's-keep')
+  assert.equal(r.result.isError, false)
+  // a real (non-empty) tool list still replaces the set
+  await b.prepare([{ name: 'read', description: 'r' }], 's-keep')
+  assert.deepEqual(b.exposed('s-keep'), ['read'])
+  assert.equal(await b.prepare([], 'fresh-empty'), null)
+  await b.dispose()
 })
 
 test('mcp-client tools (mcp__server__tool) via passthrough: approval-gated; no answer → bounded "(timeout)" deny, not a hang', async () => {

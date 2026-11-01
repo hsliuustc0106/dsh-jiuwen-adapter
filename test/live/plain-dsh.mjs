@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Opt-in plain-dsh plugin compatibility matrix (`npm run test:plain-dsh`): real dsh web profiles, no FlyBot.
+// Opt-in plain-dsh plugin compatibility matrix (`npm run test:plain-dsh`): real dsh web profiles.
 // Profiles: pref (dsh-base + dsh-web-app + driver), pjw (+ adapter last), pjwfirst (adapter first).
 // (a) non-jiuwen sessions produce the same normalized events / fork / schedules / skills / preset in all three;
 // (b) jiuwen sessions pass every read-back check (title, workdir, schedule, permissions, fork, plan, goal, dispose/archive, skills);
