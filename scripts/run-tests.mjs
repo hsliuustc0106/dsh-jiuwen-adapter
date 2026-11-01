@@ -65,5 +65,7 @@ if (problems.length) {
   console.error(`\nTEST GUARD FAILED\n  - ${problems.join('\n  - ')}\nIf tests were removed on purpose: npm run test:baseline:update -- --allow-drop (and say why in the PR).`)
   process.exit(1)
 }
-if (now.tests > baseline.tests || now.pass > baseline.pass || now.files > baseline.files) console.log('More tests than the baseline: bump it with `npm run test:baseline:update` and commit test/baseline.json.')
+const realDsh = !!process.env.DSH_NM && existsSync(process.env.DSH_NM)
+if (realDsh) console.log('(real dsh packages present: the host suites ran too, so counts above the baseline are expected; the baseline is set from a run without DSH_NM)')
+else if (now.tests > baseline.tests || now.pass > baseline.pass || now.files > baseline.files) console.log('More tests than the baseline: bump it with `npm run test:baseline:update` and commit test/baseline.json.')
 console.log('test guard: OK')

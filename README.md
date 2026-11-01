@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/hsliuustc0106/dsh-jiuwen-adapter/actions/workflows/ci.yml"><img src="https://github.com/hsliuustc0106/dsh-jiuwen-adapter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="./docs/testing.md"><img src="https://img.shields.io/badge/tests-guarded-22c55e" alt="tests guarded"></a>
   <img src="https://img.shields.io/github/package-json/v/hsliuustc0106/dsh-jiuwen-adapter?label=version" alt="version">
   <img src="https://img.shields.io/badge/dsh-%3E%3D0.2.1--rc.2%20%3C0.3.0-6366f1" alt="dsh range">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="license"></a>
@@ -85,7 +86,10 @@ The adapter also works in any Cordis app that has an `llm` service ([usage](./do
 ## Development
 
 ```bash
+npm run lint                  # node --check over index.js, src/, bin/, scripts/, test/
 npm test                      # unit, mock-gateway and runtime suites
+npm run test:coverage         # + coverage floors and the test-count baseline (what CI runs)
+bash scripts/guard-live.sh    # box-side nightly live guard (real Jiuwen + plain dsh), see docs/testing.md
 npm run compat -- --diff      # with vs. without jiuwen compat matrix (needs DSH_NM=<dsh node_modules>)
 npm run market:index          # regenerate market/index.json
 ```

@@ -1,5 +1,57 @@
 # Testing
 
+## Test guard at a glance
+
+| Where | What runs | Fails when |
+|---|---|---|
+| GitHub Actions `CI` (push / PR to `main`, manual) — `test` job: Node 22 + 24 on Ubuntu, Node 24 on macOS | `npm ci` → `npm run lint` → `npm test` → `npm run test:coverage` → live suites must print `SKIP` → `npm pack --dry-run` | syntax error, failing test, coverage below the floors, test count below the baseline, a live suite that does not skip without `JIUWEN_LIVE` |
+| CI `compat` job (dsh 0.2.1-rc.2 and rc.5 from npm) | full suite against the real dsh runtime (+ baseline) and the full-runtime A/B compat matrix | any test or matrix row differs |
+| Box, nightly or before a risky merge | `bash scripts/guard-live.sh` | any live step / plain-dsh check fails, Jiuwen not restored exactly, secret in a log |
+
+CI uploads `reports/` per leg as the `test-report-*` artifact: `junit.xml`, `lcov.info`, `coverage-summary.json`, `summary.json`; the job summary shows counts and coverage.
+
+### Guards against silent test loss
+
+- `test/scenario-catalog.test.js` maps every scenario to a test (file + test name / anchor). It fails if the file is gone or the anchor no longer appears; a self-test proves a missing scenario is reported and the catalog cannot shrink below 50 entries.
+- `test/baseline.json` holds the minimum `files` (test files), `tests` and `pass` counts and the coverage floors (`lines`, `branches`, `functions` of `src/**` + `index.js`). `scripts/run-tests.mjs` (behind `npm run test:coverage`) fails if a count drops or coverage falls below a floor.
+
+### Bump the baseline
+
+```bash
+npm run test:baseline:update                  # after adding tests: counts → current, floors → current − 1.5 (floored)
+npm run test:baseline:update -- --allow-drop  # tests removed or merged on purpose: say why in the PR
+git add test/baseline.json
+```
+
+Update from a run without `DSH_NM` (CI's `test` job has no dsh packages; with them more host suites run and the counts are higher). The update refuses to lower anything without `--allow-drop`.
+
+### Add a scenario
+
+1. Write the test: unit in `test/<area>.test.js` (mocks only), or a live check in `test/live/*.mjs` / `scripts/live-*.mjs`.
+2. Add a row to `SCENARIOS` in `test/scenario-catalog.test.js`: `[name, file, anchor]`, where `file` is the test file stem, `live` (`test/live/run.mjs`) or `live-plain-dsh` (`test/live/plain-dsh.mjs`) and `anchor` is a string from the test's name.
+3. `npm run test:coverage`, then `npm run test:baseline:update`; commit both.
+
+### Run locally
+
+```bash
+npm ci && npm run lint && npm test     # fast, no network
+npm run test:coverage                  # what CI enforces
+JIUWEN_LIVE=1 … npm run test:live      # live suites, see below (they SKIP without JIUWEN_LIVE=1 and a Gateway)
+```
+
+### Live guard (box)
+
+`scripts/guard-live.sh` runs the whole nightly live guard and needs a running JiuwenSwarm (`ws://127.0.0.1:19000/ws`), `DSH_BIN` / `DSH_NM` (defaults: `/workspace/dsh-rc5/prefix/...`).
+
+1. Snapshot Jiuwen: sha256 of `~/.jiuwenswarm/config/*` and the MCP `state.json`, RPC-visible state, and the running agentserver/gateway command line, env and cwd (in a 0700 temp dir, deleted at exit, never printed).
+2. Probe the real model once (HTTP status only). 429, or any other non-2xx status, skips the real-model smoke (`LIVE_SMOKE=1`). The summary records why.
+3. Start the stand-in model on `:18999`.
+4. `npm run test:live` (real-model smoke if allowed, `/jiuwen` commands, live-deep, compat-runtime, drop recovery). Then `npm run test:plain-dsh` (full plain/ext/busy/mem matrix, adapter-last and adapter-first). The guard switches Jiuwen to the stand-in and back by restarting the captured processes. It only signals the processes listening on the Gateway / agentserver ports.
+5. Restore and verify. Checksums and state must be identical, and the Gateway must be back on the real model endpoint. The protected ports (`GUARD_PROTECT_PORTS`, default `3335`, the FlyBot demo) must be untouched. Logs are scanned for secret values, which are redacted, and any hit fails the run.
+6. Write `/workspace/guard-logs/<date>.md` with pass/fail counts and failing test names. Full logs go to `/workspace/guard-logs/<date-time>/`. The script exits non-zero on any failure.
+
+Exit codes: `0` pass, `1` failure, `2` preflight (no Gateway / dsh). An interrupted run restores Jiuwen from the snapshot on exit.
+
 ## Layout
 
 ```
@@ -60,7 +112,7 @@ The stand-in (`test/fixtures/stand-in.mjs`) is started on `STANDIN_PORT` (18999)
 
 | Command | What it covers | Requires |
 |---|---|---|
-| `npm test` | Unit + generic host + gateway features (112 tests as of Round 3). Includes plain chat, streaming, gateway tools, openai `tool_calls`, reasoning/structured events/usage/`processing_status` filtering, markers compat, session continuity, cancel → `chat.interrupt`, agent/mode/skills/model selection, multimodal `base64Data`/`attachments`, ask_user, local titles, runtime-context filtering, extended RPCs, Round 1–3 live-fix regressions | Node ≥ 22 |
+| `npm test` | Unit + generic host + gateway features (count: `test/baseline.json`). Includes plain chat, streaming, gateway tools, openai `tool_calls`, reasoning/structured events/usage/`processing_status` filtering, markers compat, session continuity, cancel → `chat.interrupt`, agent/mode/skills/model selection, multimodal `base64Data`/`attachments`, ask_user, local titles, runtime-context filtering, extended RPCs, Round 1–3 live-fix regressions | Node ≥ 22 |
 | `npm run smoke` | mock-openai + mock-gateway end-to-end; session mapping persistence | none |
 | `npm run smoke:cordis` | Real Cordis `Context` + `LlmRuntime` loads the plugin and streams (openai mock + gateway mock; checks LlmRuntime stream grammar) | global npm dsh install (or `DSH_NODE_MODULES` / `DSH_LLM_PATH` / `DSH_CORDIS_PATH`) |
 | `GW_KILL=… GW_START=… node scripts/live-drop-recovery.mjs` | Kills/restarts a real Gateway mid-turn and idle; checks soft failure, reconnect, mapping and conversation continuity. Use a scripted stand-in model (query `SLOW<ms>` streams slowly) | controllable JiuwenSwarm |
