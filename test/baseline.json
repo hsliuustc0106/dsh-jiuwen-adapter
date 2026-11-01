@@ -1,7 +1,7 @@
 {
   "files": 58,
-  "tests": 376,
-  "pass": 372,
+  "tests": 380,
+  "pass": 376,
   "coverageMargin": 1.5,
   "coverage": {
     "lines": 95,

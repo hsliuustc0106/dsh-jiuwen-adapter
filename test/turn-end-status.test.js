@@ -56,3 +56,69 @@ test('frames after the idle status keep the turn open (grace), so a late answer 
     assert.match(r.text, /late answer|late /)
   } finally { await s.close() }
 })
+
+// Live regression (guard-live 2026-11-01, be6b36a): every turn opens a fresh socket, and the Gateway
+// delivers the PREVIOUS turn's late terminal status of the same session on it right after chat.send
+// ({is_processing:false, is_complete:true, request_id:<previous turn>}). It must not end this turn.
+const STALE = { is_processing: false, is_complete: true, request_id: 'dsh-previous-turn', session_id: 's1' }
+
+test('previous turn\'s late status on the new socket does not end the turn (no empty reply)', async () => {
+  const s = await server((ws, f) => {
+    ws.send(JSON.stringify({ type: 'res', id: f.id, ok: true }))
+    ws.send(ev('chat.processing_status', STALE))
+    setTimeout(() => ws.send(ev('chat.processing_status', { is_processing: true, request_id: f.id })), 40)
+    setTimeout(() => ws.send(ev('chat.delta', { content: 'turn two answer', request_id: f.id })), 300)
+    setTimeout(() => ws.send(ev('chat.processing_status', { is_processing: false, request_id: f.id })), 340)
+  })
+  try {
+    const r = await collect(s.url)
+    assert.equal(r.last.reason?.kind, 'stop')
+    assert.match(r.text, /turn two answer/)
+  } finally { await s.close() }
+})
+
+test('a foreign is_complete after this turn streamed text does not cut it short', async () => {
+  const s = await server((ws, f) => {
+    ws.send(JSON.stringify({ type: 'res', id: f.id, ok: true }))
+    ws.send(ev('chat.delta', { content: 'part one, ', request_id: f.id }))
+    setTimeout(() => ws.send(ev('chat.processing_status', STALE)), 20)
+    setTimeout(() => ws.send(ev('chat.delta', { content: 'part two', request_id: f.id })), 250)
+    setTimeout(() => ws.send(ev('chat.processing_status', { is_processing: false, is_complete: true, request_id: f.id })), 280)
+  })
+  try {
+    const r = await collect(s.url)
+    assert.equal(r.text, 'part one, part two')
+  } finally { await s.close() }
+})
+
+test('a mid-turn drop after a foreign idle status still fails soft with an error finish (not an empty stop)', async () => {
+  const s = await server((ws, f) => {
+    ws.send(JSON.stringify({ type: 'res', id: f.id, ok: true }))
+    ws.send(ev('chat.processing_status', STALE))
+    ws.send(ev('chat.processing_status', { is_processing: true, request_id: f.id }))
+    setTimeout(() => ws.terminate?.() ?? ws.close(), 60)
+  })
+  try {
+    const t = new GatewayTransport({ gatewayURL: s.url, userId: 't', requestTimeoutMs: 8000, finalGraceMs: 50, terminalFinalGraceMs: 80, recoverOnDrop: false })
+    const chunks = []
+    for await (const c of t.stream({ provider: 'jiuwen', model: 'm', messages: [{ role: 'user', content: 'x' }] }, { jiuwenSessionId: 's1' })) chunks.push(c)
+    assert.equal(chunks.at(-1).type, 'finish')
+    assert.equal(chunks.at(-1).reason?.kind, 'error')
+  } finally { await s.close() }
+})
+
+test('the answered ask_user request id counts as this turn (typed answer resumes it)', async () => {
+  const s = await server((ws, f) => {
+    ws.send(JSON.stringify({ type: 'res', id: f.id, ok: true }))
+    ws.send(ev('chat.delta', { content: 'resumed answer', request_id: 'dsh-question-turn' }))
+    setTimeout(() => ws.send(ev('chat.processing_status', { is_processing: false, request_id: 'dsh-question-turn' })), 20)
+  })
+  try {
+    const t = new GatewayTransport({ gatewayURL: s.url, userId: 't', requestTimeoutMs: 3000, finalGraceMs: 50, terminalFinalGraceMs: 80 })
+    const mapping = { jiuwenSessionId: 's1', pendingQuestion: { payload: { source: 'ask_user_interrupt', request_id: 'dsh-question-turn', questions: [{}] } } }
+    const chunks = []; const t0 = Date.now()
+    for await (const c of t.stream({ provider: 'jiuwen', model: 'm', messages: [{ role: 'user', content: 'blue' }] }, mapping)) chunks.push(c)
+    assert.equal(chunks.at(-1).reason?.kind, 'stop')
+    assert.ok(Date.now() - t0 < 2500, 'ended on its own status, not at requestTimeoutMs')
+  } finally { await s.close() }
+})

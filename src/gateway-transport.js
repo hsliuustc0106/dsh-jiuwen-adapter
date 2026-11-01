@@ -219,7 +219,7 @@ export class GatewayTransport {
       }))
 
       mark('chat-send'); turn.traceParams?.(params)
-      yield *this._consume(ws, requestId, signal, { recover: { sessionId: params.session_id, query }, mapping, onEvent: turn.onEvent, onTurnEnd: turn.onTurnEnd, mark, interact: turn.interact, busy: turn.busy, resumeParams: { session_id: params.session_id, mode, user_id: params.user_id, ...(projectDir ? { project_dir: projectDir, cwd: projectDir } : {}) } })
+      yield *this._consume(ws, requestId, signal, { ...(params.request_id ? { answersRequestId: params.request_id } : {}), recover: { sessionId: params.session_id, query }, mapping, onEvent: turn.onEvent, onTurnEnd: turn.onTurnEnd, mark, interact: turn.interact, busy: turn.busy, resumeParams: { session_id: params.session_id, mode, user_id: params.user_id, ...(projectDir ? { project_dir: projectDir, cwd: projectDir } : {}) } })
     } catch (error) {
       yield failureFromError(error, signal)
     } finally {
@@ -646,6 +646,8 @@ export class GatewayTransport {
     let deadline = Date.now() + this.requestTimeoutMs
     /** chat.send ids of this turn (the original plus interrupt-resume sends). */
     const turnIds = new Set([requestId])
+    // A typed answer to an open ask_user resumes that question's request: its frames belong to this turn too.
+    if (ctx.answersRequestId) turnIds.add(ctx.answersRequestId)
     /** The latest chat.send of this turn (the original, or the last interrupt-resume send). */
     let latestSendId = requestId
     /** True between answering an interaction and the first resumed output (ignore stale completion frames). */
@@ -914,6 +916,10 @@ export class GatewayTransport {
             continue
           }
           case EVENTS.PROCESSING:
+            // A fresh socket also receives the previous turn's late terminal status of the same session
+            // (turns usually end on the chat.final grace, before it arrives): only this turn's own status
+            // (request_id of one of its sends, or unscoped) may end it or count as its activity.
+            if (payload.request_id && !turnIds.has(payload.request_id)) { emitEvent({ type: 'raw', event: 'stale-processing-status', requestId: payload.request_id }); continue }
             emitEvent({ type: 'processing_status', isProcessing: payload.is_processing, isComplete: payload.is_complete, raw: payload })
             if (payload.is_complete === true && !resumePending && (finalSeen || text.body)) { yield *finish({ kind: 'stop' }); return }
             if (payload.is_processing === false && !payload.team_id) {
