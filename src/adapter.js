@@ -226,9 +226,11 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
             }
           }
           if (overrides.supportsUserInteraction === 'auto') overrides.supportsUserInteraction = Boolean(deps.hasUserQuestions?.())
-          // Auxiliary calls (compaction, jiuwen titles) use a throwaway Jiuwen session + full transcript.
+          // Auxiliary calls (compaction, jiuwen titles) run in a separate Jiuwen session with the full
+          // transcript, isolated from the main one: one stable `<id>-aux` per dsh session (default) or a
+          // fresh one per call (auxSession: 'fresh'). The stable one is deleted with the main session.
           const aux = Boolean(options.purpose)
-          const turnMapping = aux ? { ...mapping, jiuwenSessionId: `${mapping.jiuwenSessionId}-aux-${Date.now().toString(36)}`, turns: 0 } : mapping
+          const turnMapping = aux ? { ...mapping, jiuwenSessionId: auxSessionId(mapping.jiuwenSessionId, cfg.auxSession), turns: 0 } : mapping
           if (aux) overrides.historyMode = 'transcript'
           let query = buildQuery(options, turnMapping, cfg, overrides)
           // Interrupt-on-busy: the previous turn was cut by a new user message → say so (once), before system injection.
@@ -365,6 +367,11 @@ export function turnOverrides(cfg, options) {
     ...(modelName ? { modelName } : {}),
     ...(typeof req.onEvent === 'function' ? { onEvent: req.onEvent } : {}),
   }
+}
+
+/** Jiuwen session id for aux calls (compaction/titles) of one main Jiuwen session. */
+export function auxSessionId(jiuwenSessionId, mode = 'stable') {
+  return mode === 'fresh' ? `${jiuwenSessionId}-aux-${Date.now().toString(36)}` : `${jiuwenSessionId}-aux`
 }
 
 /**

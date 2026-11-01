@@ -436,6 +436,11 @@ export function installHostSync(deps) {
         if ((m.turns || 0) > 0) {
           const g = gateway()
           await (typeof g.sessionDelete === 'function' ? g.sessionDelete(m.jiuwenSessionId) : g.rpc?.('session.delete', { session_id: m.jiuwenSessionId }))
+          // The stable aux session (compaction/titles) goes with its main session; absent = soft error.
+          if (config().auxSession !== 'fresh') {
+            const aux = `${m.jiuwenSessionId}-aux`
+            await Promise.resolve(typeof g.sessionDelete === 'function' ? g.sessionDelete(aux) : g.rpc?.('session.delete', { session_id: aux })).catch(e => soft(logger, 'session.delete.aux', e))
+          }
         }
       } catch (e) { soft(logger, 'session.delete', e) }
       try { sessions.remove(id) } catch (e) { soft(logger, 'unmap', e) }
