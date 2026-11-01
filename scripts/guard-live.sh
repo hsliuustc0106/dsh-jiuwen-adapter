@@ -68,7 +68,9 @@ DAY=$(date +%F); STAMP=$(date +%F-%H%M%S); T0=$(date +%s); START=$(date '+%F %H:
 RUN_DIR="$LOG_ROOT/$STAMP"; SUMMARY="$LOG_ROOT/$DAY${GUARD_ONLY:+-$GUARD_ONLY}.md"
 mkdir -p "$RUN_DIR/live" && chmod 755 "$LOG_ROOT" "$RUN_DIR" "$RUN_DIR/live" && export GUARD_RUN_DIR=$RUN_DIR
 exec > >(tee -a "$RUN_DIR/guard.log") 2>&1
-log "run dir $RUN_DIR (adapter $(git -C "$ROOT" rev-parse --short HEAD))"
+# Revision the suites ran against (taken once: a commit during the run must not relabel it); "+dirty" = uncommitted changes.
+REV=$(git -C "$ROOT" rev-parse --short HEAD)$(git -C "$ROOT" diff --quiet HEAD -- . ':!bench/results' 2>/dev/null || echo +dirty)
+log "run dir $RUN_DIR (adapter $REV)"
 
 FAILS=()   # step-level failures
 NOTES=()
@@ -187,7 +189,7 @@ DUR=$(( ($(date +%s) - T0) / 60 ))
 {
   echo "# Live guard $DAY — $STATUS"
   echo
-  echo "- Run: $START (UTC+8), ${DUR} min, adapter \`$(git -C "$ROOT" rev-parse --short HEAD)\`, dsh \`$("$DSH_BIN" --version 2>/dev/null | head -1)\`"
+  echo "- Run: $START (UTC+8), ${DUR} min, adapter \`$REV\`, dsh \`$("$DSH_BIN" --version 2>/dev/null | head -1)\`"
   echo "- Real-model smoke: ${SMOKE/run/ran (LIVE_SMOKE=1)}${SMOKE_WHY:+ — $SMOKE_WHY}"
   echo "- Jiuwen restore: checksums $SUMS ($(wc -l < "$GUARD_SNAP/sums") files), state ${STATE_DIFF:-identical}, gateway back on the real model endpoint"
   echo "- Protected ports (${PROTECT_PORTS}): $PROT_MSG (listener pid before: $(for p in "${!PROT[@]}"; do printf '%s=%s ' "$p" "${PROT[$p]:-none}"; done))"
