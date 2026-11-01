@@ -21,6 +21,15 @@ function normalizer() {
   }
   return walk
 }
+// Union of the dsh-tools passthrough schema files (per-session dirs `s/<key>/`, plus the legacy single file).
+function mcpSchemaNames(re) {
+  const root = `${process.env.HOME}/.cache/dsh-jiuwen/mcp/dsh-tools`
+  const files = [`${root}/schemas.json`]
+  try { for (const d of FS.readdirSync(`${root}/s`)) files.push(`${root}/s/${d}/schemas.json`) } catch {}
+  const names = new Set()
+  for (const f of files) { try { for (const x of JSON.parse(FS.readFileSync(f, 'utf8'))) if (re.test(x.name)) names.add(x.name) } catch {} }
+  return names.size ? [...names].sort() : `ERR no schemas under ${root}`
+}
 export function apply(ctx) {
   const OUT = process.env.DRIVER_OUT
   if (!OUT) return
@@ -113,7 +122,44 @@ export function apply(ctx) {
           if (k === 'j') r.jwId = jw0
         } catch (e) { err(`ext ${k}`, e.stack || e) }
       }
-      try { out.ext.schemas = JSON.parse(require_fs().readFileSync(`${process.env.HOME}/.cache/dsh-jiuwen/mcp/dsh-tools/schemas.json`, 'utf8')).map(s => s.name).filter(n => /ralph|terminal|worktree|echo/i.test(n)).sort() } catch (e) { out.ext.schemas = 'ERR ' + e.message }
+      out.ext.schemas = mcpSchemaNames(/ralph|terminal|worktree|echo/i)
+      out.listeners1 = L(); out.unhandled = unhandled
+      writeFileSync(OUT, JSON.stringify(out, null, 1)); return
+    }
+    // Interrupt-on-busy (MODE=busy, PR #4): a slow turn, then two user messages while it runs.
+    // jiuwen: chat.interrupt, the two messages coalesce into ONE resend step with the interruption note.
+    // non-jiuwen: dsh's own queueing, which must be identical with / without the adapter.
+    if (MODE === 'busy') {
+      const api = g('jiuwenAdapter')
+      const sl = () => { try { return require_fs().readFileSync((process.env.STANDIN_LOG || '/tmp/standin.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return {} } }) } catch { return [] } }
+      out.busy = {}
+      const routes = [['p', { provider: 'standin', model: 'standin-m1' }], ...(api ? [['j', { provider: 'jiuwen', model: 'jiuwen-default' }]] : [])]
+      const send = (id, text) => sc.prompt({ requestId: `r-${randomUUID()}`, sessionId: id, mode: 'queue', content: [{ type: 'text', text }] }, new AbortController().signal).catch(e => err(`busy send ${text.slice(0, 20)}`, e))
+      for (const [k, model] of routes) {
+        const r = out.busy[k] = {}
+        try {
+          const { sessionId: id } = await sc.create({ cwd: SANDBOX }, new AbortController().signal); await sc.selectModel({ sessionId: id, ...model }, new AbortController().signal)
+          await prompt(id, `TAG:${k}b0 warm up`)
+          const n0 = evs(id).filter(e => e.type === 'assistant/message').length
+          const t0 = Date.now()
+          send(id, `TAG:${k}b1 SLOW12000 long task`)
+          await tick(3000)
+          send(id, `TAG:${k}b2 actually do this instead`)
+          await tick(400)
+          send(id, `TAG:${k}b3 and this too`)
+          await tick(1500); await waitIdle(id, 90_000)
+          r.ms = Date.now() - t0
+          r.replies = evs(id).filter(e => e.type === 'assistant/message').slice(n0).map(e => textOf(e.data.message).slice(0, 160))
+          r.reqs = sl().filter(x => /^(p|j)b[123]$/.test(x.tag) && x.tag.startsWith(k) && !/Generate the session title/.test(x.last || '')).map(x => ({ tag: x.tag, users: x.users, note: !!x.busyNote, tags: x.tags, last: (x.last || '').slice(0, 120) }))
+          r.types = [...new Set(evs(id).map(e => e.type))].sort()
+          if (k === 'j') {
+            r.jwId = api.sessions.get(id)?.jiuwenSessionId
+            // the next turn is a normal turn again (no stale note)
+            await prompt(id, `TAG:${k}b4 next`)
+            r.after = { reply: lastReply(id).slice(0, 120), note: !!sl().filter(x => x.tag === 'jb4').at(-1)?.busyNote }
+          }
+        } catch (e) { err(`busy ${k}`, e.stack || e) }
+      }
       out.listeners1 = L(); out.unhandled = unhandled
       writeFileSync(OUT, JSON.stringify(out, null, 1)); return
     }

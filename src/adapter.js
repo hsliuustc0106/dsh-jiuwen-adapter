@@ -18,6 +18,7 @@ import { applySystemInjection, applyFsRouteInjection } from './system-inject.js'
 import { applySkillBodyInjection } from './host-sync.js'
 import { toGatewayQuery, contentToText, withInferredRoles } from './messages.js'
 import { fileBlocksFromHandles } from './multimodal.js'
+import { carryBlock } from './busy-interrupt.js'
 
 /**
  * @param {typeof import('@deepseek-ai/dsh-llm').LlmAdapter | null} LlmAdapterBase
@@ -222,11 +223,15 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           if (aux) overrides.historyMode = 'transcript'
           let query = buildQuery(options, turnMapping, cfg, overrides)
           // Interrupt-on-busy: the previous turn was cut by a new user message → say so (once), before system injection.
+          // A carried text (the interrupted turn never reached Jiuwen) is resent ahead of the new message(s).
+          let busyText = query
+          let busyCount = 1
           if (!aux && deps.busy) {
-            const note = deps.busy.takeNote(dshSessionId)
-            if (note && !turnMapping.pendingQuestion) {
-              query = `${note}\n\n${query}`
-              makeTrace(cfg.traceFile)({ at: 'turn-interrupt', phase: 'resend', dshSessionId, query: query.slice(0, 300) })
+            const r = deps.busy.takeResend?.(dshSessionId)
+            if (r && !turnMapping.pendingQuestion) {
+              if (r.carry) { busyText = `${r.carry}\n\n${query}`; busyCount = r.count }
+              query = r.carry ? `${r.note}\n\n${carryBlock(r.carry)}\n${query}` : `${r.note}\n\n${query}`
+              makeTrace(cfg.traceFile)({ at: 'turn-interrupt', phase: 'resend', dshSessionId, carried: r.carry ? r.carry.length : undefined, query: query.slice(0, 300) })
             }
           }
           // injectSystem (jiuwen sessions only; fail soft). Skipped for aux calls and ask_user answers.
@@ -259,6 +264,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           let recorded = false
           const endTurn = aux ? () => {} : (deps.sessions.beginTurn?.(dshSessionId) || (() => {}))
           const busy = !aux && deps.busy && cfg.onBusyMessage === 'interrupt' ? deps.busy.begin(dshSessionId) : undefined
+          if (busy) { busy.userText = busyText; busy.userCount = busyCount }
           try {
           request = { ...request, messages: options.messages }
           yield *this._gatewayTransport().stream(request, turnMapping, {

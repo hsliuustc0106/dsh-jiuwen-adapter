@@ -36,6 +36,14 @@ export function interruptNote(count = 1) {
     + 'The message(s) below are the latest instructions and supersede the interrupted request where they conflict.]'
 }
 
+/**
+ * Text of messages whose turn was interrupted before its chat.send went out (Jiuwen never saw them).
+ * Prepended to the resend so they are not lost.
+ */
+export function carryBlock(text) {
+  return `[Earlier message(s) from the user, sent while the previous turn was being interrupted (not seen by you yet):]\n${text}\n\n[Newest message(s):]`
+}
+
 /** True when an inbox message should trigger an interrupt (person-originated input, not automation). */
 export function isUserMessage(message, ignore = DEFAULT_BUSY_IGNORE_SOURCES) {
   if (!message || typeof message !== 'object') return false
@@ -64,6 +72,8 @@ export function createBusyRegistry(deps) {
       if (!subscribed) { subscribed = true; try { deps.subscribe?.((id, m) => api.noteMessage(id, m)) } catch { /* host without inbox events */ } }
       const st = {
         fire: null, requested: false, count: 0, awaiting: null, done: false, at: 0,
+        /** set by the adapter: this turn's user text (incl. any carried text) and how many messages it holds */
+        userText: '', userCount: 0,
         /** transport: subscribe; fires immediately when a request already arrived. */
         attach(fn) { st.fire = fn; if (st.requested && !st.done) fn() },
         /** transport: the interrupt settled and the stream is about to finish `stop`. */
@@ -81,8 +91,10 @@ export function createBusyRegistry(deps) {
               promoted = moved.length
             }
           } catch (error) { deps.logger?.warn?.(`[dsh-jiuwen] interrupt: inbox coalesce failed: ${error?.message || error}`) }
-          notes.set(dshSessionId, { count: Math.max(1, st.count) })
-          trace({ at: 'turn-interrupt', phase: 'settled', dshSessionId, messages: st.count, promoted, waitedMs: Date.now() - st.at, settledBy: info.by, partialChars: info.chars })
+          // Interrupted before chat.send went out: Jiuwen never saw this turn's text, so carry it into the resend.
+          const carry = info.unsent && st.userText ? st.userText : undefined
+          notes.set(dshSessionId, { count: Math.max(1, st.count) + (carry ? Math.max(1, st.userCount) : 0), ...(carry ? { carry } : {}) })
+          trace({ at: 'turn-interrupt', phase: 'settled', dshSessionId, messages: st.count, promoted, waitedMs: Date.now() - st.at, settledBy: info.by, partialChars: info.chars, ...(carry ? { carried: carry.length } : {}) })
         },
         end() { st.done = true; if (turns.get(dshSessionId) === st) turns.delete(dshSessionId) },
       }
@@ -117,12 +129,17 @@ export function createBusyRegistry(deps) {
       return deferred ? 'deferred' : 'interrupt'
     },
 
-    /** Consume the pending interrupt note for this session's next turn. */
-    takeNote(dshSessionId) {
+    /** Consume the pending interrupt note: `{ note, carry?, count }` (carry = text Jiuwen never received). */
+    takeResend(dshSessionId) {
       const n = notes.get(dshSessionId)
       if (!n) return undefined
       notes.delete(dshSessionId)
-      return interruptNote(n.count)
+      return { note: interruptNote(n.count), count: n.count, ...(n.carry ? { carry: n.carry } : {}) }
+    },
+    /** Consume the pending interrupt note as one prefix string (note + carried text). */
+    takeNote(dshSessionId) {
+      const r = api.takeResend(dshSessionId)
+      return r && (r.carry ? `${r.note}\n\n${carryBlock(r.carry)}` : r.note)
     },
     /** Drop a pending note (host stop/cancel after the interrupt). */
     clearNote(dshSessionId) { notes.delete(dshSessionId) },

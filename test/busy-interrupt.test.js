@@ -212,3 +212,34 @@ test('mock gateway: aux calls (compaction/title) and non-user inbox events never
   const jw = h.api.jiuwenSessionId('bx')
   assert.equal((await mock.rpc('debug.state')).interrupts.filter(p => p.session_id === jw).length, 0)
 })
+
+test('mock gateway: a message during the resend\'s post-cancel settle → resend not sent; its text is carried into the next resend (live plain-dsh fix)', async () => {
+  const agent = { id: 'bi-carry', inbox: fakeInbox() }
+  const { h, send, trace } = setup({}, { agents: { get: () => agent } })
+  setTimeout(() => send(agent), 700)
+  const cs1 = await h.run({ sessionId: 'bi-carry', messages: user(LONG) })
+  assert.ok(txt(cs1).endsWith(INTERRUPTED_MARK))
+  const jw = h.api.jiuwenSessionId('bi-carry')
+  const sends0 = ((await mock.rpc('debug.state')).history[jw] || []).filter(m => m.role === 'user').length
+  // The resend step (message B) starts; message C lands while the transport still waits out the post-cancel settle.
+  setTimeout(() => send(agent), 150)
+  const hist1 = [...user(LONG), { role: 'assistant', content: txt(cs1) }]
+  const cs2 = await h.run({ sessionId: 'bi-carry', messages: [...hist1, ...user('MSG-B do this instead')] })
+  assert.equal(cs2.at(-1).reason.kind, 'stop')
+  assert.equal(txt(cs2), INTERRUPTED_MARK)
+  let users = ((await mock.rpc('debug.state')).history[jw] || []).filter(m => m.role === 'user')
+  assert.equal(users.length, sends0, 'B was not sent to Jiuwen (send-then-cancel would drop it unrecorded)')
+  // Next step: the host's trailing user message is C only; Jiuwen must still get B.
+  await h.run({ sessionId: 'bi-carry', messages: [...hist1, ...user('MSG-B do this instead'), { role: 'assistant', content: txt(cs2) }, ...user('MSG-C and this too')] })
+  users = ((await mock.rpc('debug.state')).history[jw] || []).filter(m => m.role === 'user')
+  const last = users.at(-1).content
+  assert.match(last, /2 new messages/)
+  assert.match(last, /not seen by you yet/)
+  assert.ok(last.indexOf('MSG-B') > 0 && last.indexOf('MSG-B') < last.indexOf('MSG-C'), last)
+  assert.equal((last.match(/previous turn was interrupted/g) || []).length, 1, 'one note, B carried without its own note')
+  const tr = trace()
+  assert.ok(tr.some(r => r.at === 'turn-interrupt' && r.phase === 'settled' && r.settledBy === 'before-send' && r.carried > 0))
+  // consumed once
+  await h.run({ sessionId: 'bi-carry', messages: [...user('x'), { role: 'assistant', content: 'y' }, ...user('MSG-D')] })
+  assert.doesNotMatch(((await mock.rpc('debug.state')).history[jw] || []).filter(m => m.role === 'user').at(-1).content, /interrupted|MSG-B/)
+})
