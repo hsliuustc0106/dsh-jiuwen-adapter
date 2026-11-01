@@ -155,8 +155,12 @@ export function resolveConfig(raw = {}, opts = {}) {
       : (raw.supportsUserInteraction === false || env.JIUWEN_SUPPORTS_USER_INTERACTION === '0' ? false : 'auto'),
     /** Max wait for a dsh user-questions answer (ms; 0 = no limit). */
     questionTimeoutMs: Number(raw.questionTimeoutMs ?? env.JIUWEN_QUESTION_TIMEOUT_MS ?? 600_000),
-    /** Max wait for a dsh approval decision before denying (ms). */
-    approvalTimeoutMs: Number(raw.approvalTimeoutMs ?? env.JIUWEN_APPROVAL_TIMEOUT_MS ?? 300_000),
+    /**
+     * Optional adapter-side limit on waiting for a dsh decision (permission ask, plan review, SwarmFlow
+     * human turn, legacy 'dsh' gate) before denying (ms). Default 0 = none, as in native dsh: the ask
+     * waits for the user, the dsh turn's abort, or the approval policy (`never` rejects at once).
+     */
+    approvalTimeoutMs: Number(raw.approvalTimeoutMs ?? env.JIUWEN_APPROVAL_TIMEOUT_MS ?? 0),
     /** dsh tools → Jiuwen: 'mcp' (default when hostSync on; allowlisted dsh tools as MCP) | 'off'. */
     toolPassthrough,
     /**
@@ -197,7 +201,13 @@ export function resolveConfig(raw = {}, opts = {}) {
         : ['session_search', 'session_event_search', 'session_event_read', 'session_trace', 'session_event_trace', 'get_goal', 'update_goal', 'create_goal'],
     mapJiuwenFsToDsh,
 
-    toolCallTimeoutMs: Number(raw.toolCallTimeoutMs ?? env.JIUWEN_TOOL_CALL_TIMEOUT_MS ?? 120_000),
+    /**
+     * Optional adapter-side cap on one passthrough call (ms). Default 0 = none, as for a native call:
+     * dsh's own per-tool timeout policy bounds the run inside the pipeline, the dsh turn's abort cancels it.
+     */
+    toolCallTimeoutMs: Number(raw.toolCallTimeoutMs ?? env.JIUWEN_TOOL_CALL_TIMEOUT_MS ?? 0),
+    /** Transport deadline of one passthrough call (Jiuwen MCP timeout_s + proxy wait). Unset: caps + 5 s, or 1 h without caps. */
+    mcpCallTimeoutMs: raw.mcpCallTimeoutMs ?? env.JIUWEN_MCP_CALL_TIMEOUT_MS ?? undefined,
     mcpServerName: String(raw.mcpServerName || env.JIUWEN_MCP_SERVER_NAME || 'dsh-tools'),
     /** Shared dir for the stable MCP proxy (schemas.json + ep-<pid>.json). Default ~/.cache/dsh-jiuwen/mcp/<mcpServerName>. */
     mcpStateDir: raw.mcpStateDir || env.JIUWEN_MCP_STATE_DIR || undefined,

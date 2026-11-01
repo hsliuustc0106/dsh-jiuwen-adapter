@@ -43,10 +43,38 @@ export function proxyRegistration(name, stateDir, callTimeoutMs) {
   return { name, transport: 'stdio', command: process.execPath, args: [PROXY_PATH, stateDir], timeout_s: Math.ceil(callTimeoutMs / 1000) }
 }
 
-/** Is Jiuwen's persisted record already our connected proxy (same command/args)? */
+/**
+ * Is Jiuwen's persisted record already our connected proxy (same command/args and, when Jiuwen
+ * recorded one, the same timeout_s)? A changed call budget must reach Jiuwen: an old record kept
+ * `timeout_s: 120` and Jiuwen abandoned calls dsh was still running (or still asking about).
+ */
 export function isProxyConnected(record, reg) {
   return Boolean(record && record.state === 'connected' && record.transport === 'stdio'
-    && record.command === reg.command && JSON.stringify(record.args || []) === JSON.stringify(reg.args))
+    && record.command === reg.command && JSON.stringify(record.args || []) === JSON.stringify(reg.args)
+    && (record.timeout_s === undefined || reg.timeout_s === undefined || Number(record.timeout_s) === Number(reg.timeout_s)))
+}
+
+/**
+ * Transport deadline of one Jiuwen → dsh call (Jiuwen's MCP `timeout_s` and the stdio proxy's HTTP
+ * wait). It only has to outlast dsh's own handling, which has no blanket cap natively (approval
+ * waits for the user; dsh's per-tool timeout policy bounds the run), so: explicit
+ * `mcpCallTimeoutMs`, else the adapter's own optional caps + 5 s, else 1 h.
+ */
+export function mcpCallTimeoutMs(c = {}) {
+  const explicit = Number(c.mcpCallTimeoutMs)
+  if (Number.isFinite(explicit) && explicit > 0) return explicit
+  const run = Math.max(0, Number(c.toolCallTimeoutMs) || 0)
+  const ask = c.toolApproval === 'none' ? 0 : Math.max(0, Number(c.approvalTimeoutMs) || 0)
+  return run > 0 ? run + ask + 5_000 : 3_600_000
+}
+
+/** One signal aborted when any of `signals` (falsy entries ignored) aborts. */
+function anySignal(signals) {
+  const ac = new AbortController()
+  const list = signals.filter(Boolean)
+  const on = () => ac.abort()
+  for (const s of list) { if (s.aborted) { ac.abort(); break } s.addEventListener?.('abort', on, { once: true }) }
+  return { signal: ac.signal, abort: () => ac.abort(), dispose() { for (const s of list) s.removeEventListener?.('abort', on) } }
 }
 
 const alive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e?.code === 'EPERM' } }
@@ -119,7 +147,7 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     const key = createHash('sha256').update(String(sessionId)).digest('hex').slice(0, 16)
     const name = sessionMcpName(cfg().mcpServerName, sessionId)
     const stateDir = join(rootStateDir(), 's', key)
-    e = { key, name, stateDir, schemas: new Map(), epFile: undefined, needsRegister: false, registered: false, sessionId, lastUsed: Date.now(), inflight: 0 }
+    e = { key, name, stateDir, schemas: new Map(), admitted: new Set(), turnSignal: undefined, epFile: undefined, needsRegister: false, registered: false, sessionId, lastUsed: Date.now(), inflight: 0 }
     sessions.set(sessionId, e)
     byKey.set(key, sessionId)
     return e
@@ -143,14 +171,34 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     return candidates[0]
   }
 
-  /** Total budget for one passthrough call (approval wait + execution), shared with the Jiuwen registration. */
-  const callBudgetMs = (c) => Number(c.toolCallTimeoutMs) + (c.toolApproval === 'none' ? 0 : Math.max(0, Number(c.approvalTimeoutMs) || 0))
+  /**
+   * Optional adapter-side cap on one passthrough call (0 = none, the default: as for a native call,
+   * dsh's per-tool timeout policy bounds the run and an approval waits for the user or the turn).
+   */
+  const callCapMs = (c) => {
+    const run = Math.max(0, Number(c.toolCallTimeoutMs) || 0)
+    if (!run) return 0
+    return run + (c.toolApproval === 'none' ? 0 : Math.max(0, Number(c.approvalTimeoutMs) || 0))
+  }
+
+  /**
+   * Admission: callable when this session admitted it at any prepare() (allowlist or host-declared),
+   * not only in the latest request, or when it is in the published schemas.json (the union Jiuwen
+   * was shown) and matches the current allowlist. dsh's registry then decides visibility for the
+   * agent exactly as for a native call (UNKNOWN_TOOL otherwise).
+   */
+  function admitted(e, name) {
+    if (!e) return false
+    if (e.schemas.has(name) || e.admitted.has(name)) return true
+    const onDisk = readJson(join(e.stateDir, 'schemas.json'), [])
+    if (Array.isArray(onDisk) && onDisk.some(t => t?.name === name) && matchesAllowlist(name, cfg().toolAllowlist)) { e.admitted.add(name); return true }
+    return false
+  }
 
   async function callTool(sessionId, name, args, callerSignal) {
     const c = cfg()
     const e = sessions.get(sessionId)
-    // e.schemas only holds tools admitted at prepare() (allowlist or host-declared).
-    if (!e?.schemas.has(name)) {
+    if (!admitted(e, name)) {
       return { isError: true, text: `tool ${name} is not exposed by dsh (session=${sessionId})` }
     }
     const { tools, approval, agents } = services()
@@ -163,18 +211,18 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     if (runtime) {
       // 'host': dsh decides, exactly as for a native call. Approval policy `never` + a pre-execute
       // `allow` runs the tool; a real `ask` goes to ctx.approval (and `never` rejects it, as natively).
+      // Cancellation as for a native call: the dsh turn's signal (and a dropped proxy connection).
       e.lastUsed = Date.now(); e.inflight++
-      const ac = new AbortController()
-      const onCaller = () => ac.abort()
-      callerSignal?.addEventListener?.('abort', onCaller, { once: true })
-      const t = setTimeout(() => ac.abort(), callBudgetMs(c))
+      const fused = anySignal([callerSignal, e.turnSignal])
+      const cap = callCapMs(c)
+      const t = cap ? setTimeout(fused.abort, cap) : undefined
       try {
-        const result = await runtime.execute({ callId: `jiuwen-${randomUUID()}`, name, arguments: args ?? {}, agent, signal: ac.signal })
+        const result = await runtime.execute({ callId: `jiuwen-${randomUUID()}`, name, arguments: args ?? {}, agent, signal: fused.signal })
         return { isError: Boolean(result?.isError), text: finish(toText(result)) }
       } catch (error) {
         return { isError: true, text: `dsh tool ${name} failed: ${error?.message || error}` }
       } finally {
-        clearTimeout(t); callerSignal?.removeEventListener?.('abort', onCaller)
+        clearTimeout(t); fused.dispose()
         e.inflight--; e.lastUsed = Date.now()
       }
     }
@@ -190,29 +238,27 @@ export function createMcpBridge({ config, services, rpc, logger }) {
       if (approval?.request && agent) {
         let timer
         try {
-          outcome = await Promise.race([
-            approval.request({ agent, toolName: name, reason: `JiuwenSwarm wants to run dsh tool ${name}`, ...(callerSignal ? { signal: callerSignal } : {}) }),
-            new Promise(r => { timer = setTimeout(() => r('timeout'), c.approvalTimeoutMs); timer.unref?.() }),
-          ])
+          const races = [Promise.resolve(approval.request({ agent, toolName: name, reason: `JiuwenSwarm wants to run dsh tool ${name}`, ...(callerSignal ? { signal: callerSignal } : {}) }))]
+          if (Number(c.approvalTimeoutMs) > 0) races.push(new Promise(r => { timer = setTimeout(() => r('timeout'), c.approvalTimeoutMs); timer.unref?.() }))
+          outcome = await Promise.race(races)
         } catch { outcome = 'unavailable' } finally { clearTimeout(timer) }
       }
       if (outcome !== 'allowed-once') return { isError: true, text: `dsh denied ${name} (${outcome})` }
     }
     e.lastUsed = Date.now(); e.inflight++
-    const ac = new AbortController()
-    const onCaller = () => ac.abort()
-    callerSignal?.addEventListener?.('abort', onCaller, { once: true })
-    const t = setTimeout(() => ac.abort(), c.toolCallTimeoutMs)
+    const fused = anySignal([callerSignal, e.turnSignal])
+    const run = Math.max(0, Number(c.toolCallTimeoutMs) || 0)
+    const t = run ? setTimeout(fused.abort, run) : undefined
     try {
       const result = await def.execute(args ?? {}, {
-        callId: `jiuwen-${randomUUID()}`, name, arguments: args ?? {}, agent, signal: ac.signal,
+        callId: `jiuwen-${randomUUID()}`, name, arguments: args ?? {}, agent, signal: fused.signal,
         deferContext() {}, concludeTurn() {},
       })
       // The skill loader returns host skill bodies (prompt text, like the index-mode injection): mask secrets.
       return { isError: false, text: finish(toText(result)) }
     } catch (error) {
       return { isError: true, text: `dsh tool ${name} failed: ${error?.message || error}` }
-    } finally { clearTimeout(t); callerSignal?.removeEventListener?.('abort', onCaller); e.inflight--; e.lastUsed = Date.now() }
+    } finally { clearTimeout(t); fused.dispose(); e.inflight--; e.lastUsed = Date.now() }
   }
 
   async function handle(sessionId, msg, signal) {
@@ -264,7 +310,7 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     const c = cfg()
     // Jiuwen's MCP call timeout covers the whole call (approval wait + run) plus a margin, so the
     // adapter's own deadline answers first and Jiuwen never abandons a call that is still running.
-    const reg = proxyRegistration(e.name, e.stateDir, callBudgetMs(c) + 5_000)
+    const reg = proxyRegistration(e.name, e.stateDir, mcpCallTimeoutMs(c))
     const record = readJson(jiuwenState(), {})?.mcp?.[e.name]
     const timeoutMs = c.mcpRpcTimeoutMs ?? 30_000
     if (isProxyConnected(record, reg)) {
@@ -284,7 +330,7 @@ export function createMcpBridge({ config, services, rpc, logger }) {
     const url = `http://127.0.0.1:${port}/mcp/${e.key}`
     e.epFile = join(e.stateDir, `ep-${process.pid}.json`)
     mkdirSync(e.stateDir, { recursive: true, mode: 0o700 })
-    writeAtomic(e.epFile, JSON.stringify({ pid: process.pid, url, token, ts: Date.now(), tools: [...e.schemas.keys()], sessionId: e.sessionId }))
+    writeAtomic(e.epFile, JSON.stringify({ pid: process.pid, url, token, ts: Date.now(), tools: [...new Set([...e.schemas.keys(), ...e.admitted])], sessionId: e.sessionId, callTimeoutMs: mcpCallTimeoutMs(cfg()) }))
     return url
   }
 
@@ -436,9 +482,11 @@ export function createMcpBridge({ config, services, rpc, logger }) {
      * Refresh exposed schemas for this dsh session; register a per-session MCP server.
      * Returns { url, mcpServerName, ... } — caller must put mcpServerName into chat.send mcp[].
      */
-    async prepare(tools, sessionId) {
+    async prepare(tools, sessionId, opts = {}) {
       const e = ensureEntry(sessionId)
       e.lastUsed = Date.now()
+      // The dsh turn's abort signal: a cancelled turn cancels its in-flight passthrough calls.
+      if (opts?.signal) e.turnSignal = opts.signal
       const c0 = cfg()
       // An empty tool list (e.g. host-sync's "make sure the proxy exists" call) is not a new turn's
       // tool set: keep the admitted schemas, or tools/call for them would fail as "not exposed".
@@ -450,6 +498,7 @@ export function createMcpBridge({ config, services, rpc, logger }) {
         const t = (tools || []).find((x) => x?.name === loader)
         if (t) e.schemas.set(t.name, t)
       }
+      for (const n of e.schemas.keys()) e.admitted.add(n)
       if (!e.schemas.size) return null
 
       const lr = await startListen()

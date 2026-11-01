@@ -54,6 +54,7 @@ export interface JiuwenAdapterConfig {
   /** @deprecated Put the key in an environment variable and set `apiKeyEnv`. */
   apiKey?: string
   apiKeyEnv?: string
+  /** Optional limit (ms) on waiting for a dsh decision before denying; default 0 = none (native dsh has no approval timeout). */
   approvalTimeoutMs?: number
   authToken?: string
   authorization?: string
@@ -173,7 +174,10 @@ export interface JiuwenAdapterConfig {
   /** 'host' (default): dsh's own tool pipeline decides | 'dsh': legacy per-call ctx.approval gate | 'none'. */
   toolApproval?: 'host' | 'dsh' | 'none' | string
   toolApprovalExempt?: string[]
+  /** Optional adapter cap (ms) on one passthrough call; default 0 = none (dsh's per-tool timeout policy applies). */
   toolCallTimeoutMs?: number
+  /** Transport deadline (ms) of one passthrough call: Jiuwen MCP timeout_s + proxy wait. Default: caps + 5 s, or 1 h. */
+  mcpCallTimeoutMs?: number
   toolPassthrough?: boolean
   traceFile?: string
   typedEvents?: boolean

@@ -257,7 +257,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           let mcpName = cfg.mcpServerName
           let mcpAttached = false
           if (!aux && cfg.toolPassthrough === 'mcp' && deps.mcpBridge && options.tools?.length) {
-            const r = await deps.mcpBridge.prepare(options.tools, dshSessionId)
+            const r = await deps.mcpBridge.prepare(options.tools, dshSessionId, { signal: options.signal })
             mcpName = r?.mcpServerName || cfg.mcpServerName
             trace({ at: 'mcp-passthrough', exposed: deps.mcpBridge.exposed?.(dshSessionId) ?? deps.mcpBridge.exposed(), mcpServerName: mcpName, error: r?.error })
             if (r && !r.error) { overrides.mcp = [...(overrides.mcp || []), mcpName]; mcpAttached = true }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createMcpBridge, sessionMcpName, proxyRegistration } from '../src/mcp-bridge.js'
+import { createMcpBridge, sessionMcpName, proxyRegistration, mcpCallTimeoutMs } from '../src/mcp-bridge.js'
 import { auxSessionId } from '../src/adapter.js'
 import { denyJiuwenSideEffectTools, resetSentPermissions } from '../src/fs-route.js'
 
@@ -21,7 +21,7 @@ function bridge(cfg = {}, rpcImpl) {
 const tools = [{ name: 'read', description: 'r' }, { name: 'bash', description: 'b' }]
 const markConnected = (c, sid) => {
   const name = sessionMcpName('dsh-tools', sid)
-  const reg = proxyRegistration(name, join(c.mcpStateDir, 's', name.slice(10)), c.toolCallTimeoutMs)
+  const reg = proxyRegistration(name, join(c.mcpStateDir, 's', name.slice(10)), mcpCallTimeoutMs(c))
   writeFileSync(c.jiuwenMcpStateFile, JSON.stringify({ mcp: { [name]: { ...reg, state: 'connected' } } }))
 }
 

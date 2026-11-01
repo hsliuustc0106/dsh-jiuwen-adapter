@@ -5,6 +5,7 @@ import { resolveHostProfile } from './host-profiles.js'
  * Namespaced, fail-soft, feature-detected Gateway methods. Defaults ON via hostSync.
  */
 import { sessionUsesProvider, scopedService } from './bridges.js'
+import { JIUWEN_SIDE_EFFECT_TOOLS } from './fs-route.js'
 
 const PLAN_CHAT = 'agent.plan'
 /** Jiuwen tools a permission preset touches (never permissions.tools.set). */
@@ -93,6 +94,17 @@ export function installHostSync(deps) {
     if (!session) skillsQueued = run
     return run
   }
+  /**
+   * Jiuwen tools a dsh permission preset may set. With mapJiuwenFsToDsh (default with the MCP
+   * passthrough) Jiuwen's bash / write_file / edit_file are denied and shell/file IO runs through dsh's
+   * own tools, where dsh's preset already applies natively; re-levelling them here (`full-access` →
+   * allow) re-enabled Jiuwen's unsandboxed builtins around dsh's pipeline, and fs-route's per-process
+   * cache then never denied them again.
+   */
+  const presetTools = () => {
+    const c = config() || {}
+    return c.mapJiuwenFsToDsh && c.toolPassthrough === 'mcp' ? PERMISSION_TOOLS.filter(t => !JIUWEN_SIDE_EFFECT_TOOLS.includes(t)) : PERMISSION_TOOLS
+  }
   let permTail = Promise.resolve()
   let permWanted = null
   const queuePermissions = (level) => {
@@ -102,7 +114,7 @@ export function installHostSync(deps) {
     permTail = permTail.then(async () => {
       const lvl = permWanted; permWanted = null
       if (disposed || !lvl) return
-      for (const tool of PERMISSION_TOOLS) await rpcOk(gateway, 'permissions.tools.update', { tool, level: lvl }, logger, 'permissions')
+      for (const tool of presetTools()) await rpcOk(gateway, 'permissions.tools.update', { tool, level: lvl }, logger, 'permissions')
     }).catch(e => soft(logger, 'permissions', e))
     return permTail
   }

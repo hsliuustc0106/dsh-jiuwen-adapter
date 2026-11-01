@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
-import { createMcpBridge, matchesAllowlist, proxyRegistration, isProxyConnected, sessionMcpName, PROXY_PATH } from '../src/mcp-bridge.js'
+import { createMcpBridge, matchesAllowlist, proxyRegistration, isProxyConnected, sessionMcpName, PROXY_PATH, mcpCallTimeoutMs } from '../src/mcp-bridge.js'
 
 const tmp = mkdtempSync(join(tmpdir(), 'jw-mcp-test-'))
 process.on('exit', () => rmSync(tmp, { recursive: true, force: true }))
@@ -54,7 +54,7 @@ test('registers a per-session stdio proxy; dispose never disconnects; reconnect 
   assert.equal(calls.length, 2, 'no mcp.disconnect / delete_custom on dispose')
   assert.ok(!existsSync(ep))
   // Next prepare with connected record → reuse
-  const reg = proxyRegistration(name, stateDir, 1000)
+  const reg = proxyRegistration(name, stateDir, mcpCallTimeoutMs(base))
   writeFileSync(join(tmp, 'jiuwen-state.json'), JSON.stringify({ mcp: { [name]: { ...reg, state: 'connected' } } }))
   assert.ok(isProxyConnected({ ...reg, state: 'connected' }, reg))
   const next = bridge({})

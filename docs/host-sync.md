@@ -18,7 +18,7 @@ Master switch: `hostSync` (default **on**). `hostSync: false` or `JIUWEN_HOST_SY
 | Session delete (`api-session/removed`) | `session.delete` when the mapping had turns, then unmap. During an active turn: `chat.interrupt`, wait (≤15 s), then delete | `syncDelete` |
 | Goal create/pause/resume/clear | `command.goal` (dsh `resume` → `resume` after our `pause`, else `set`) | `syncGoal` |
 | Host pause (`workspace/session-stop`) | `chat.interrupt` cancel | `syncPause` |
-| Permission preset (safe map) | `permissions.tools.update` on `bash`/`write_file`/`edit_file` — never `set-all`. The session's first (seeded default) preset is a baseline and is not forwarded; only later changes are | `syncPermissions` |
+| Permission preset (safe map) | `permissions.tools.update` on `bash`/`write_file`/`edit_file` — never `set-all`. The session's first (seeded default) preset is a baseline and is not forwarded; only later changes are. With `mapJiuwenFsToDsh` (default with the MCP passthrough) these builtins stay denied and are skipped — shell/file IO runs through dsh's tools, where the dsh preset applies natively | `syncPermissions` |
 | Session fork (`header.parentSession`) | `session.fork` + remap child (turns/options copied; subagent children are not forked) | `syncFork` |
 | Group member change | Clears `systemHash` so persona reinjects on next turn, for the `session/event` types listed in `hostProfile.groupEvents` (none by default) | `syncGroup` |
 | dsh persona sections | Read-only `system-prompt/assemble` listener remembers `deployment:persona-prefix/suffix` per session for `injectSystem: persona` (plain dsh; or a `hostProfile` object); returns the assembly untouched | `hostSync` + `injectSystem: persona` |

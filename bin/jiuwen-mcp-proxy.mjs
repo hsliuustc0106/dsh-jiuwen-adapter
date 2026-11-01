@@ -33,7 +33,9 @@ async function forward(dir, msg) {
   const eps = liveEndpoints(dir).filter(e => !e.tools || e.tools.includes(msg.params?.name))
   if (!eps.length) return { content: [{ type: 'text', text: 'dsh is not running (no live dsh process serves this tool); the call was not executed' }], isError: true }
   const ep = eps[0]
-  const ac = new AbortController(); const t = setTimeout(() => ac.abort(), CALL_TIMEOUT_MS)
+  // The dsh process advertises its call budget (mcpCallTimeoutMs) in its endpoint file; the env/default is the fallback.
+  const budget = Number(process.env.DSH_JIUWEN_PROXY_CALL_TIMEOUT_MS) > 0 ? CALL_TIMEOUT_MS : (Number(ep.callTimeoutMs) > 0 ? Number(ep.callTimeoutMs) : CALL_TIMEOUT_MS)
+  const ac = new AbortController(); const t = setTimeout(() => ac.abort(), budget)
   try {
     const r = await fetch(ep.url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${ep.token}` }, body: JSON.stringify(msg), signal: ac.signal })
     const j = await r.json()

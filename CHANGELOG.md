@@ -14,6 +14,7 @@ All notable changes to this project are documented here. The format follows
 - **`toolApproval: host` (new default)**: Jiuwen passthrough calls run through dsh's own tool pipeline (`tools.execute`: pre-execute policy, sandbox guards, approval policy, execute wrappers incl. per-tool timeout, post-execute, finalizers, `tools/result`), so approval policy `never` no longer denies calls dsh itself would run (`dsh denied write (rejected)`). `dsh` (legacy per-call gate) and `none` stay as explicit options; falls back to `dsh` without a tools runtime `execute()` / live agent.
 - Plan review and SwarmFlow human turns are asked via `ctx.userQuestions` (like dsh's `exit_plan_mode`), not `ctx.approval` (which rejects everything under `never`); tool permission asks still use `ctx.approval`.
 - `prepare([])` keeps admitted schemas; Jiuwen MCP `timeout_s` covers approval wait + run; passthrough calls are cancelled when the proxy connection drops.
+- Native parity: `approvalTimeoutMs` and `toolCallTimeoutMs` default to 0 (no adapter-own deadline; dsh's per-tool timeout policy and the turn's abort apply); new `mcpCallTimeoutMs` transport deadline (default 1 h) advertised to the proxy, and stale Jiuwen records with another `timeout_s` are re-registered; the dsh turn signal cancels passthrough calls; admission is the session's admitted union (not only the latest request); Jiuwen permission asks about dsh passthrough tools are delegated to dsh's pipeline; permission-preset sync no longer re-allows Jiuwen builtins that `mapJiuwenFsToDsh` routes through dsh.
 
 ## Unreleased
 

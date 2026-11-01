@@ -20,6 +20,16 @@
  */
 
 const APPROVAL_SOURCES = new Set(['permission_interrupt', 'confirm_interrupt'])
+
+/**
+ * Is `toolName` (as Jiuwen names it: `mcp_<server>_<tool>`) one of this adapter's dsh passthrough
+ * tools (`<mcpServerName>` or a per-session `<mcpServerName>-<sha16>`)? Those calls are decided by
+ * dsh's own tool pipeline when they run, so a Jiuwen-side permission ask for them is a second gate.
+ */
+export function isDshPassthroughTool(toolName, serverName = 'dsh-tools') {
+  const esc = String(serverName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`^mcp_${esc}(-[a-f0-9]{16})?_.+`).test(String(toolName || ''))
+}
 const APPROVE_LABEL = 'Approve'
 const KEEP_PLANNING_LABEL = 'Keep planning'
 const REJECT_LABEL = 'Reject'
@@ -127,6 +137,17 @@ export function createInteractor(deps) {
       let outcome = 'unavailable'
       let feedback = ''
       let viaQuestions = false
+      if (payload?.source === 'permission_interrupt' && (cfg.toolApproval || 'host') !== 'none' && isDshPassthroughTool(toolName, cfg.mcpServerName)) {
+        // A Jiuwen permission ask about a dsh passthrough tool: dsh's own pipeline (pre-execute policy,
+        // sandbox, ctx.approval under the session policy) decides when the call reaches dsh. Asking
+        // here as well double-gated it and, under approval policy `never`, rejected calls native dsh
+        // runs. Not fail-open: the dsh side still denies whatever dsh would deny.
+        return {
+          kind: 'approval', outcome: 'delegated',
+          answers: approvalAnswers(questions.length ? questions : [payload || {}], true, payload?.plan_actions, ''),
+          note: `• approval ${toolName}: delegated to dsh's tool pipeline`,
+        }
+      }
       if (isPlan && userQuestions?.ask) {
         // Plan review, as dsh's own exit_plan_mode does it: a question card (not a permission ask).
         const plan = String(payload?.plan || q.plan || q.detail || payload?.content || '').slice(0, 20_000)

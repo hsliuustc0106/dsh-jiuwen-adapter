@@ -21,7 +21,8 @@ Verified live on npm `@deepseek-ai/dsh@0.2.1-rc.2` + local JiuwenSwarm Gateway `
 - Plan review (`plan.approval_required`, and `confirm_interrupt` for `exit_plan_mode`) is asked like dsh's own `exit_plan_mode`: a `ctx.userQuestions` card (*Approve* / *Keep planning*, plan text as detail, typed text = feedback). dsh asks questions regardless of the approval policy, so plan review keeps working under the `auto` preset (`never`). Without a user-questions channel (or when it has no answerer) it falls back to `ctx.approval` as before.
 - SwarmFlow human turns (`source: swarmflow_human`) are a `ctx.userQuestions` card too (*Approve* / *Reject*, or the step's own options; typed text is sent verbatim with `chat.swarmflow_reply`), with the `ctx.approval` fallback.
 - Decision → Jiuwen option: `allowed-once` → option whose value/label is `allow_once`/`approve`/…; anything else → `reject`/`deny`/…, then resumed with `chat.send {request_id, answers, source}`.
-- **Safe default = deny**: no `ctx.approval`, no live agent, `rejected`/`cancelled`/`unavailable`, error, abort or `approvalTimeoutMs` (default 300000) → reject. Approvals never fail open. dsh approval policy `never` (auto-approve) is honoured because it is dsh's own decision.
+- **Safe default = deny**: no `ctx.approval`, no live agent, `rejected`/`cancelled`/`unavailable`, error, abort or an explicit `approvalTimeoutMs` (default none, like native dsh) → reject. Approvals never fail open. dsh approval policy `never` means *never prompt, reject every ask* — it is applied by dsh's own `ctx.approval`, exactly as for a native ask.
+- A Jiuwen `permission_interrupt` about one of the adapter's own passthrough tools (`mcp_<mcpServerName>[-<sha16>]_<tool>`) is answered *allow once* without asking: dsh's pipeline decides that call when it reaches dsh (pre-execute policy, sandbox, `ctx.approval`), so a second ask only double-gated it and, under `never`, rejected calls native dsh runs. Not with `toolApproval: none` (no dsh gate there).
 - Live (dsh 0.2.1-rc.2, `JIUWEN_CHAT_MODE=code.plan`): rejected → Jiuwen did not execute the plan (file not created); `allowed-once` → plan executed (`/tmp/jwplan.txt` = `hi`).
 
 
@@ -42,7 +43,7 @@ Why the proxy: JiuwenSwarm's worker spins at 100 % CPU forever when it closes a 
     toolPassthrough: mcp             # JIUWEN_TOOL_PASSTHROUGH
     toolAllowlist: [web_fetch, working_directory, 'my_plugin_*']   # JIUWEN_TOOL_ALLOWLIST (comma); '*' = all — empty = none
     toolApproval: host               # default: dsh's own tool pipeline decides (pre-execute/sandbox/approval policy); 'dsh' = legacy per-call ctx.approval gate; 'none' = no approval
-    toolCallTimeoutMs: 120000
+    # toolCallTimeoutMs: 0            # default: no adapter cap (dsh's per-tool timeout policy applies)
     mcpServerName: dsh-tools
     # mcpStateDir: ~/.cache/dsh-jiuwen/mcp/dsh-tools   # JIUWEN_MCP_STATE_DIR
     # mcpRpcTimeoutMs: 30000                            # JIUWEN_MCP_RPC_TIMEOUT_MS
