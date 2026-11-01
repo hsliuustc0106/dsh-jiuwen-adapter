@@ -180,10 +180,10 @@ export function applySystemInjection(query, options, mapping, mode, fallbackPers
 }
 
 /** Append the FS-routing hint once per mapped session when mapJiuwenFsToDsh is on. */
-export function applyFsRouteInjection(query, mapping, enabled, serverName) {
+export function applyFsRouteInjection(query, mapping, enabled, serverName, exposed, mode) {
   try {
     if (!enabled) return { query }
-    const hint = fsRouteHint(serverName)
+    const hint = fsRouteHint(serverName, exposed, mode)
     const hash = systemHash(`fs-route:${mapping?.jiuwenSessionId || ''}\n${hint}`)
     if (mapping?.fsRouteHash === hash) return { query }
     return { query: `${hint}\n\n${query}`, hash }

@@ -19,6 +19,8 @@
  * no live agent, timeout or error → reject.
  */
 
+import { routedCounterpart, isJiuwenInternalPath, JIUWEN_INTERNAL_READ_TOOLS, mcpToolName } from './fs-route.js'
+
 const APPROVAL_SOURCES = new Set(['permission_interrupt', 'confirm_interrupt'])
 
 /**
@@ -30,6 +32,29 @@ export function isDshPassthroughTool(toolName, serverName = 'dsh-tools') {
   const esc = String(serverName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return new RegExp(`^mcp_${esc}(-[a-f0-9]{16})?_.+`).test(String(toolName || ''))
 }
+/**
+ * The tool a Jiuwen permission ask is about. Live Gateway payloads carry no `tool_name`: the header
+ * is `权限审批: <tool>` (or a category title) and the question names it as ``<tool>`` 类工具.
+ */
+export function askToolName(payload, q = {}) {
+  const direct = q.tool_name || payload?.tool_name
+  if (direct) return String(direct)
+  const header = String(q.header || '')
+  const h = /^(?:权限审批|Permission(?: approval)?)\s*[:：]\s*([A-Za-z0-9_.:-]+)/i.exec(header)
+  if (h) return h[1]
+  const text = String(q.question || q.message || payload?.message || '')
+  const m = /``([A-Za-z0-9_.:-]+)`` 类工具/.exec(text) || /`([A-Za-z0-9_.:-]+)` 需要授权/.exec(text)
+  return m ? m[1] : undefined
+}
+
+/** The path a Jiuwen permission ask is about (tool_payload, else the question text), or ''. */
+export function askPath(q = {}) {
+  const tp = q.tool_payload && typeof q.tool_payload === 'object' ? q.tool_payload : {}
+  for (const k of ['file_path', 'path', 'target_file', 'file', 'directory', 'dir']) if (typeof tp[k] === 'string' && tp[k].trim()) return tp[k].trim()
+  const m = /在 ``([^`]+)`` 下/.exec(String(q.question || ''))
+  return m ? m[1] : ''
+}
+
 const APPROVE_LABEL = 'Approve'
 const KEEP_PLANNING_LABEL = 'Keep planning'
 const REJECT_LABEL = 'Reject'
@@ -82,7 +107,11 @@ function linkedAbort(parent) {
 const ALLOW_RE = /^(allow_once|allow|approve|approved|yes|execute|implement|accept)$/i
 const REJECT_RE = /^(reject|deny|denied|no|cancel|skip)$/i
 
-/** @param {{ services: () => { userQuestions?: any, approval?: any, agents?: any }, config: () => any, logger?: any }} deps */
+/**
+ * @param {{ services: () => { userQuestions?: any, approval?: any, agents?: any }, config: () => any, logger?: any,
+ *   routing?: (dshSessionId: string) => ({ on: boolean, serverName?: string, exposed?: string[] } | undefined) }} deps
+ *   routing: whether dsh tool routing is on for the session, its passthrough server name and exposed dsh tools.
+ */
 export function createInteractor(deps) {
   // dshSessionId -> { agent, ac } for host question cards currently awaiting the user.
   const pendingAsks = new Map()
@@ -150,7 +179,7 @@ export function createInteractor(deps) {
 
     if (eventType === 'plan.approval_required' || APPROVAL_SOURCES.has(payload?.source)) {
       const q = questions[0] || payload || {}
-      const toolName = String(q.tool_name || payload?.tool_name || (eventType === 'plan.approval_required' || payload?.source === 'confirm_interrupt' ? 'exit_plan_mode' : 'jiuwen-tool'))
+      const toolName = String(askToolName(payload, q) || (eventType === 'plan.approval_required' || payload?.source === 'confirm_interrupt' ? 'exit_plan_mode' : 'jiuwen-tool'))
       const reason = String(q.question || q.message || payload?.message || payload?.content || `Jiuwen requests permission: ${toolName}`).slice(0, 2000)
       const isPlan = eventType === 'plan.approval_required' || (payload?.source === 'confirm_interrupt' && toolName === 'exit_plan_mode')
       let outcome = 'unavailable'
@@ -166,6 +195,24 @@ export function createInteractor(deps) {
           answers: approvalAnswers(questions.length ? questions : [payload || {}], true, payload?.plan_actions, ''),
           note: `• approval ${toolName}: delegated to dsh's tool pipeline`,
         }
+      }
+      const routing = payload?.source === 'permission_interrupt' && (cfg.hideJiuwenBuiltins || 'deny') !== 'off' ? deps.routing?.(dshSessionId) : undefined
+      const dshTool = routing?.on ? routedCounterpart(toolName, routing.exposed) : undefined
+      const internalRead = routing?.on && JIUWEN_INTERNAL_READ_TOOLS.includes(toolName) && isJiuwenInternalPath(askPath(q))
+      if (dshTool || internalRead) {
+        // A Jiuwen built-in that duplicates a dsh tool passed through this session: hidden here, so
+        // the adapter decides instead of opening a dsh card (with approvalTimeoutMs 0 an unattended
+        // run would wait on it forever). Jiuwen's own data dir (plan files, skills) → allow, the
+        // rest → declined with the dsh tool to use instead (that call then runs dsh's own pipeline).
+        const qs = questions.length ? questions : [payload || {}]
+        if (internalRead) {
+          return { kind: 'approval', outcome: 'auto-allowed', answers: approvalAnswers(qs, true, payload?.plan_actions, ''),
+            note: `• approval ${toolName}: allowed (Jiuwen's own data dir)` }
+        }
+        const use = mcpToolName(routing.serverName || cfg.mcpServerName, dshTool)
+        const feedback = `Jiuwen built-in ${toolName} is hidden in this dsh session. Call ${use} instead (it runs through dsh's sandbox and approval policy).`
+        return { kind: 'approval', outcome: 'redirected', answers: approvalAnswers(qs, false, payload?.plan_actions, feedback),
+          note: `• approval ${toolName}: declined → use ${use}` }
       }
       if (isPlan && userQuestions?.ask) {
         // Plan review, as dsh's own exit_plan_mode does it: a question card (not a permission ask).

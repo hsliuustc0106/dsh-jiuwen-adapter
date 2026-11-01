@@ -200,6 +200,16 @@ export function resolveConfig(raw = {}, opts = {}) {
       : env.JIUWEN_TOOL_APPROVAL_EXEMPT !== undefined ? String(env.JIUWEN_TOOL_APPROVAL_EXEMPT).split(',').map(x => x.trim()).filter(Boolean)
         : ['session_search', 'session_event_search', 'session_event_read', 'session_trace', 'session_event_trace', 'get_goal', 'update_goal', 'create_goal'],
     mapJiuwenFsToDsh,
+    /**
+     * With dsh tool routing on (mapJiuwenFsToDsh + MCP passthrough), how Jiuwen built-ins that
+     * duplicate a passed-through dsh tool are hidden:
+     *  - 'deny' (default): prompt hint + adapter-decided permission asks (never a dsh card) + owned,
+     *    reversible Jiuwen deny of the delegation built-ins (subagent_spawn / task_tool) when dsh's
+     *    `subagent` is passed through; Jiuwen's own goal is not armed when dsh's goal tools are.
+     *  - 'prompt': the same without the extra Jiuwen deny.
+     *  - 'off': legacy (only bash / write_file / edit_file denied, permission asks become dsh cards).
+     */
+    hideJiuwenBuiltins: pickEnum(env.JIUWEN_HIDE_JIUWEN_BUILTINS || raw.hideJiuwenBuiltins, ['deny', 'prompt', 'off'], 'deny'),
 
     /**
      * Optional adapter-side cap on one passthrough call (ms). Default 0 = none, as for a native call:

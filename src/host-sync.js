@@ -6,6 +6,7 @@ import { resolveHostProfile } from './host-profiles.js'
  */
 import { sessionUsesProvider, scopedService } from './bridges.js'
 import { JIUWEN_SIDE_EFFECT_TOOLS } from './fs-route.js'
+import { matchesAllowlist } from './mcp-bridge.js'
 
 const PLAN_CHAT = 'agent.plan'
 /** Jiuwen tools a permission preset touches (never permissions.tools.set). */
@@ -80,7 +81,7 @@ async function rpcOk(gateway, method, params, logger, label) {
  * @param {{ ctx, config: () => object, sessions, gateway: () => object, logger, services: () => object, mcpBridge?: object }} deps
  */
 export function installHostSync(deps) {
-  const { ctx, config, sessions, gateway, logger, services, mcpBridge } = deps
+  const { ctx, config, sessions, gateway, logger, services, mcpBridge, permLedger } = deps
   const offs = []
   let disposed = false
   // Skills/permission syncs are serialized (one socket per RPC would otherwise race: a rapid
@@ -114,7 +115,17 @@ export function installHostSync(deps) {
     permTail = permTail.then(async () => {
       const lvl = permWanted; permWanted = null
       if (disposed || !lvl) return
-      for (const tool of presetTools()) await rpcOk(gateway, 'permissions.tools.update', { tool, level: lvl }, logger, 'permissions')
+      const tools = presetTools()
+      // Record what the preset mirror writes (and the level before it) so the adapter can restore
+      // exactly its own global Jiuwen entries later (perm-ledger.js); user values are never adopted.
+      const before = permLedger && tools.length ? (await rpcOk(gateway, 'permissions.tools.get', {}, logger, 'permissions'))?.tools || {} : {}
+      for (const tool of tools) {
+        const r = await rpcOk(gateway, 'permissions.tools.update', { tool, level: lvl }, logger, 'permissions')
+        if (r !== null && permLedger) {
+          const prior = before[tool] && typeof before[tool] === 'object' ? before[tool]['*'] : before[tool]
+          await permLedger.record(tool, lvl, { owner: 'preset', prior: prior ?? null }).catch(e => soft(logger, 'permissions', e))
+        }
+      }
     }).catch(e => soft(logger, 'permissions', e))
     return permTail
   }
@@ -130,6 +141,22 @@ export function installHostSync(deps) {
     goalSent.set(params.session_id, { key, at: now })
     goalLast.set(params.session_id, params.action)
     return rpcOk(gateway, 'command.goal', params, logger, label)
+  }
+  /**
+   * dsh's goal tools (get_goal / update_goal) are passed through to this session's Jiuwen agent:
+   * the goal lives in dsh only. Arming Jiuwen's own goal as well gave two drivers and a one-way
+   * completion (Jiuwen's submit_goal_report completed only Jiuwen's copy; dsh kept driving rounds
+   * until round-limit → blocked). Then only `clear` is forwarded (drops a legacy Jiuwen goal).
+   */
+  const goalRouted = (dshSid) => {
+    const c = config() || {}
+    if (!c.mapJiuwenFsToDsh || c.toolPassthrough !== 'mcp' || (c.hideJiuwenBuiltins || 'deny') === 'off') return false
+    const exposed = mcpBridge?.exposed?.(dshSid)
+    if (Array.isArray(exposed) && exposed.length) return exposed.includes('update_goal')
+    // No turn prepared yet in this session: dsh registers update_goal and the allowlist admits it.
+    let def
+    try { def = services?.()?.tools?.get?.('update_goal') } catch { def = undefined }
+    return Boolean(def) && matchesAllowlist('update_goal', c.toolAllowlist)
   }
   const on = (name, fn) => {
     try {
@@ -358,7 +385,9 @@ export function installHostSync(deps) {
         : op === 'resume' && phase === 'active' ? resumeOrSet(j.mapping.jiuwenSessionId, objective)
         : phase === 'active' && objective ? 'set'
         : null
-      if (action === 'resume') {
+      if (action && action !== 'clear' && goalRouted(j.id)) {
+        soft(logger, 'goal', `dsh goal tools routed; not arming Jiuwen's goal (${action})`)
+      } else if (action === 'resume') {
         sendGoal({ session_id: j.mapping.jiuwenSessionId, action: 'resume' }, 'goal.resume')
       } else if (action === 'set') {
         sendGoal({ session_id: j.mapping.jiuwenSessionId, action: 'set', objective: String(objective) }, 'goal.set')
@@ -390,6 +419,7 @@ export function installHostSync(deps) {
     else if (phase === 'active') action = objective ? 'set' : 'resume'
     else if (objective) action = 'set'
     if (!action) return
+    if (action !== 'clear' && goalRouted(j.id)) return
     const params = { session_id: j.mapping.jiuwenSessionId, action }
     if (action === 'set') params.objective = String(objective)
     sendGoal(params, 'goal/changed')

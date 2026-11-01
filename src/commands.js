@@ -8,7 +8,7 @@ import { formatGatewayError } from './gateway-transport.js'
 import { findExt, extHelp, tokenize, EXT } from './commands-ext.js'
 
 export const SUBCOMMANDS =
-  'status | models | model <name|default> | model-info <id|name> | mode [name|default] | pause | resume | rename <title> | pin [on|off] | fork | switch | archive | unarchive | unmap | delete confirm | goal [get|set <text>|pause|resume|clear] | workflows [list|get <id>] | history | btw <question> | recap | skill-toggle <name> <on|off> | plan-status | supplement <text> | teams | compact | interrupt | sessions | skills [installed] | agents | tools | hooks | permissions [set <tool> <allow|ask|deny>|unset <tool>] | plugins [enable|disable <name>] | projects [info|sessions [id]] | archived | assets | version | heartbeat [set <every> [target]|jobs] | path | locale | commands | templates | cron | updater [check|conf] | agent <name> | skill-info <name> | marketplaces | bindings | mcp | mcp-reset confirm | help'
+  'status | models | model <name|default> | model-info <id|name> | mode [name|default] | pause | resume | rename <title> | pin [on|off] | fork | switch | archive | unarchive | unmap | delete confirm | goal [get|set <text>|pause|resume|clear] | workflows [list|get <id>] | history | btw <question> | recap | skill-toggle <name> <on|off> | plan-status | supplement <text> | teams | compact | interrupt | sessions | skills [installed] | agents | tools | hooks | permissions [set <tool> <allow|ask|deny>|unset <tool>|release confirm] | plugins [enable|disable <name>] | projects [info|sessions [id]] | archived | assets | version | heartbeat [set <every> [target]|jobs] | path | locale | commands | templates | cron | updater [check|conf] | agent <name> | skill-info <name> | marketplaces | bindings | mcp | mcp-reset confirm | help'
 
 /**
  * @param {{ sessions: import('./session-store.js').SessionStore, gateway: () => import('./gateway-transport.js').GatewayTransport, config: () => any, mcpBridge?: any }} deps
@@ -18,7 +18,7 @@ export const HELP_GROUPS = [
   ['Turn control', 'pause, resume, interrupt, compact, btw <question>, recap, supplement <text>, goal [get|set <text>|pause|resume|clear], plan-status, workflows [list|get <id>]'],
   ['Models & mode', 'models, model <name|default>, model-info <id|name>, mode [name|default]'],
   ['Skills & agents', 'skills [installed], skill-info <name>, skill-toggle <name> <on|off>, marketplaces, agents, agent <name>, tools, templates, teams, bindings'],
-  ['Config & policy', 'hooks, permissions [set <tool> <allow|ask|deny>|unset <tool>], plugins [enable|disable <name>], heartbeat [set <every> [target]|jobs], cron, path, locale, commands, projects [info|sessions [id]]'],
+  ['Config & policy', 'hooks, permissions [set <tool> <allow|ask|deny>|unset <tool>|release confirm], plugins [enable|disable <name>], heartbeat [set <every> [target]|jobs], cron, path, locale, commands, projects [info|sessions [id]]'],
   ['System', 'version, updater [check|conf], mcp, mcp-reset confirm, help'],
 ]
 export const helpText = (name = 'jiuwen', isUnsupported) => `Usage: /${name} <subcommand>\n${[...HELP_GROUPS.map(([k, v]) => `${k}: ${v}`), ...extHelp(isUnsupported)].join('\n')}`
@@ -366,7 +366,20 @@ export function createJiuwenCommand(deps) {
           await g.permissionsToolsDelete(tool)
           return `Removed permission override for ${tool}.`
         }
-        if (action && !['get', 'list'].includes(action)) return 'Usage: /jiuwen permissions [set <tool> <allow|ask|deny>|unset <tool>]'
+        if (action === 'release') {
+          // Restore the global Jiuwen permission entries this adapter wrote (routing denies, preset mirror).
+          if (!deps.permLedger) return 'No adapter permission ledger in this host.'
+          if (!hasConfirm(rest.slice(1))) {
+            const owned = Object.entries(deps.permLedger.entries())
+            return owned.length
+              ? `Would restore ${owned.map(([t, r]) => `${t}: ${r.level} → ${r.prior ?? '(unset)'}`).join(', ')}. Add "confirm". dsh tool routing re-applies its denies on the next turn while it is on.`
+              : 'The adapter owns no Jiuwen permission entries.'
+          }
+          const r = await deps.permLedger.release()
+          if (r.error) return `Release failed: ${short(r.error, 160)}`
+          return `Restored: ${r.released.join(', ') || 'none'}${r.dropped.length ? `; left (changed outside the adapter): ${r.dropped.join(', ')}` : ''}${r.errors.length ? `; failed: ${r.errors.join(', ')}` : ''}.`
+        }
+        if (action && !['get', 'list'].includes(action)) return 'Usage: /jiuwen permissions [set <tool> <allow|ask|deny>|unset <tool>|release confirm]'
         const [tools, rules] = await Promise.allSettled([g.permissionsToolsGet(), g.permissionsRulesGet()])
         const lines = []
         if (tools.status === 'fulfilled') {
@@ -379,6 +392,10 @@ export function createJiuwenCommand(deps) {
           if (ask.length) lines.push(`ask: ${ask.join(', ')}`)
           if (deny.length) lines.push(`deny: ${deny.join(', ')}`)
         } else lines.push(`tools: unavailable (${short(tools.reason?.message || tools.reason, 80)})`)
+        try {
+          const owned = Object.entries(deps.permLedger?.entries?.() || {})
+          if (owned.length) lines.push(`adapter-owned: ${owned.map(([t, r]) => `${t}=${r.level} (${r.owner}; was ${r.prior ?? 'unset'})`).join(', ')}`)
+        } catch { /* ignore */ }
         if (rules.status === 'fulfilled') lines.push(`rules: ${(rules.value?.rules || []).length}`)
         else lines.push(`rules: unavailable (${short(rules.reason?.message || rules.reason, 80)})`)
         return `Jiuwen permissions:

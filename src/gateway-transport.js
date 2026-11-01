@@ -633,6 +633,8 @@ export class GatewayTransport {
     let deadline = Date.now() + this.requestTimeoutMs
     /** chat.send ids of this turn (the original plus interrupt-resume sends). */
     const turnIds = new Set([requestId])
+    /** The latest chat.send of this turn (the original, or the last interrupt-resume send). */
+    let latestSendId = requestId
     /** True between answering an interaction and the first resumed output (ignore stale completion frames). */
     let resumePending = false
     /** After a resume: start of the resumed segment in text.body, and a guard against Jiuwen re-streaming already-shown text. */
@@ -901,6 +903,17 @@ export class GatewayTransport {
           case EVENTS.PROCESSING:
             emitEvent({ type: 'processing_status', isProcessing: payload.is_processing, isComplete: payload.is_complete, raw: payload })
             if (payload.is_complete === true && !resumePending && (finalSeen || text.body)) { yield *finish({ kind: 'stop' }); return }
+            if (payload.is_processing === false && !payload.team_id) {
+              // AgentServer's own end-of-run status is {is_processing:false} with is_complete only on the
+              // envelope (and the Gateway then sends none of its own). Waiting for payload.is_complete
+              // left a turn whose answer had no closing chat.final (e.g. after a tool call / resumed
+              // request) open until requestTimeoutMs: Jiuwen idle, dsh never got the message/turn end.
+              // End it like a terminal chat.final: after the short idle grace (any later frame of this
+              // turn keeps it open). A stale status of the request an answered interaction resumed is
+              // ignored unless it names the latest resume send.
+              const ownsLatest = Boolean(payload.request_id) && payload.request_id === latestSendId
+              if (!resumePending || ownsLatest) { finalSeen = true; terminalFinal = true }
+            }
             if (this.showProcessingStatus) yield *activity(this, `… ${payload.is_processing ? 'processing' : 'idle'}`)
             continue
           case EVENTS.USAGE_SUMMARY:
@@ -951,7 +964,7 @@ export class GatewayTransport {
                   } }))
                 } else if (INTERRUPT_RESUME_SOURCES.has(source) && rid) {
                   const id = `dsh-resume-${randomUUID()}`
-                  turnIds.add(id)
+                  turnIds.add(id); latestSendId = id
                   ws.send(JSON.stringify({ type: 'req', id, method: CHAT.SEND, is_stream: true, params: {
                     ...(ctx.resumeParams || {}), query: '', content: '', request_id: rid, answers: reply.answers, source, supports_user_interaction: true,
                   } }))

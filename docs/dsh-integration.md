@@ -96,7 +96,7 @@ When the host provides `ctx.commands` (`@deepseek-ai/dsh-commands`; web UI, ACP 
 | `/jiuwen teams` | `team.templates.list` + `team.list` → fallback `team.bindings.list` (0.2.7) |
 | `/jiuwen tools` | `agents.tools_list` (Jiuwen-owned tool names + count) |
 | `/jiuwen hooks` | `hooks.list` (total hooks, non-empty events) |
-| `/jiuwen permissions` [`set <tool> <allow\|ask\|deny>`\|`unset <tool>`] | get: `permissions.tools.get` + `permissions.rules.get`; set/unset: `permissions.tools.update` / `delete` |
+| `/jiuwen permissions` [`set <tool> <allow\|ask\|deny>`\|`unset <tool>`\|`release [confirm]`] | get: `permissions.tools.get` + `permissions.rules.get` (+ the adapter-owned entries from the permission ledger); set/unset: `permissions.tools.update` / `delete`; `release`: preview / restore every adapter-owned entry to its prior value |
 | `/jiuwen plugins` [`enable\|disable <name>`] | list: `plugins.list`; enable/disable: `plugins.enable` / `plugins.disable` (`name`) |
 | `/jiuwen projects` [`info\|sessions [id]`] | list: `project.list`; info: `project.info`; sessions: `project.get_sessions` |
 | `/jiuwen archived` | `session.archived.list` |

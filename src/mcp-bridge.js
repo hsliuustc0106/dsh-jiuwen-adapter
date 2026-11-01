@@ -555,6 +555,12 @@ export function createMcpBridge({ config, services, rpc, logger }) {
       return [...all]
     },
 
+    /**
+     * Run one admitted dsh tool for a session exactly as a passthrough call would (dsh's pipeline,
+     * the live agent's initiator context). Used by the goal bridge. Never throws: { isError, text }.
+     */
+    callTool: (sessionId, name, args, signal) => callTool(sessionId, name, args, signal),
+
     sessionServerName: (sessionId) => sessions.get(sessionId)?.name || sessionMcpName(cfg().mcpServerName, sessionId),
 
     async verify(sessionId) {

@@ -102,6 +102,8 @@ export interface JiuwenAdapterConfig {
   sessionOverrides?: Array<{ preset?: string, match?: string, modelName?: string, chatMode?: string, agentTemplateName?: string }>
   /** Route Jiuwen built-in bash/write_file/edit_file to the dsh MCP passthrough tools. */
   mapJiuwenFsToDsh?: boolean
+  /** With dsh tool routing on: how duplicate Jiuwen built-ins are hidden (default 'deny'). */
+  hideJiuwenBuiltins?: 'deny' | 'prompt' | 'off'
   /** Jiuwen steps in reasoning: summary | full (default; structured Markdown). */
   trajectoryDetail?: 'summary' | 'full'
   ignoreMessagePatterns?: Array<string | RegExp>

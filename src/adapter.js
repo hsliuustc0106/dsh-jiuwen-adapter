@@ -264,7 +264,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           }
           // Only point the model at mcp_<server>_* when the passthrough server is actually attached this turn.
           if (!aux && cfg.mapJiuwenFsToDsh && mcpAttached && !turnMapping.pendingQuestion) {
-            const fs = applyFsRouteInjection(query, turnMapping, true, mcpName)
+            const fs = applyFsRouteInjection(query, turnMapping, true, mcpName, deps.mcpBridge.exposed?.(dshSessionId), cfg.hideJiuwenBuiltins)
             query = fs.query
             if (fs.hash) fsRouteHash = fs.hash
           }
@@ -295,7 +295,10 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           const busy = !aux && deps.busy && cfg.onBusyMessage === 'interrupt' ? deps.busy.begin(dshSessionId) : undefined
           try {
           request = { ...request, messages: options.messages }
-          yield *this._gatewayTransport().stream(request, turnMapping, {
+          // Goal bridge (Jiuwen submit_goal_report → dsh update_goal): finish the update while this
+          // dsh turn is still open, i.e. before passing the turn's `finish` on.
+          const goalUpdates = new Set()
+          const gwStream = this._gatewayTransport().stream(request, turnMapping, {
             query,
             mark: (name) => trace({ at: 'mark', name }),
             traceParams: (p) => trace({ at: 'params', params: { ...p, content: undefined, query: String(p.query).slice(0, 300) } }),
@@ -309,6 +312,9 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
             } } : {}),
             onEvent: (e) => {
               commitInjected()
+              if (!aux && deps.goalBridge) {
+                try { const p = deps.goalBridge.observe(dshSessionId, e); if (p) { goalUpdates.add(p); p.finally(() => goalUpdates.delete(p)) } } catch { /* ignore */ }
+              }
               trace({ at: 'event', type: e.type, name: e.name, event: e.event, ...(e.type === 'interaction_answered' ? { eventType: e.eventType, source: e.source, outcome: e.outcome, raw: JSON.stringify(e.raw).slice(0, 1500) } : {}) })
               try { overrides.onEvent?.(e) } catch { /* ignore */ }
               try { deps.onEvent?.({ dshSessionId, ...e }) } catch { /* ignore */ }
@@ -325,6 +331,10 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
               if (!aux) { try { deps.onEvent?.({ dshSessionId, type: 'turn_end', sessionId: turnMapping.jiuwenSessionId, requestId: info.requestId, reason: info.reason }) } catch { /* ignore */ } }
             },
           })
+          for await (const chunk of gwStream) {
+            if (chunk?.type === 'finish' && goalUpdates.size) await Promise.allSettled([...goalUpdates])
+            yield chunk
+          }
           } finally {
             // Host may stop iterating right after abort; Jiuwen already holds the user message.
             if (!recorded && !aux && options.signal?.aborted) {
