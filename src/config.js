@@ -173,6 +173,14 @@ export function resolveConfig(raw = {}, opts = {}) {
     /** Shared dir for the stable MCP proxy (schemas.json + ep-<pid>.json). Default ~/.cache/dsh-jiuwen/mcp/<mcpServerName>. */
     mcpStateDir: raw.mcpStateDir || env.JIUWEN_MCP_STATE_DIR || undefined,
     mcpRpcTimeoutMs: Number(raw.mcpRpcTimeoutMs ?? env.JIUWEN_MCP_RPC_TIMEOUT_MS ?? 30_000),
+    /** Release a per-session MCP proxy registration after this long without a turn/tool call (0 = only on session end). */
+    mcpSessionIdleMs: Number(raw.mcpSessionIdleMs ?? env.JIUWEN_MCP_SESSION_IDLE_MS ?? 30 * 60_000),
+    /** On first passthrough turn, delete stale `<mcpServerName>-<sha16>` registrations no live process serves. */
+    mcpGcOnStart: raw.mcpGcOnStart !== false && env.JIUWEN_MCP_GC_ON_START !== '0',
+    /** GC leaves state dirs modified within this window alone (a process may be registering). */
+    mcpGcGraceMs: Number(raw.mcpGcGraceMs ?? env.JIUWEN_MCP_GC_GRACE_MS ?? 120_000),
+    /** Aux calls (compaction, titles): `stable` = one `<jiuwenSessionId>-aux` session per dsh session; `fresh` = new session per call (legacy). */
+    auxSession: (raw.auxSession ?? env.JIUWEN_AUX_SESSION) === 'fresh' ? 'fresh' : 'stable',
     /** Register the `/jiuwen` slash command on ctx.commands when available. */
     registerCommands: raw.registerCommands !== false && env.JIUWEN_REGISTER_COMMANDS !== '0',
     // ── Bridges (sessionSync/planBridge default ON with hostSync; modelDiscovery/typedEvents still opt-in) ──

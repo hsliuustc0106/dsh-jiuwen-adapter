@@ -57,6 +57,10 @@ Precedence: **environment variable > Cordis plugin config > default** (`provider
 | `mcpServerName` | `JIUWEN_MCP_SERVER_NAME` | `dsh-tools` | Name of the stable stdio MCP proxy registered once in Jiuwen (experimental) |
 | `mcpStateDir` | `JIUWEN_MCP_STATE_DIR` | `~/.cache/dsh-jiuwen/mcp/<name>` | Shared dir: `schemas.json` + `ep-<pid>.json` read by the proxy |
 | `mcpRpcTimeoutMs` | `JIUWEN_MCP_RPC_TIMEOUT_MS` | `30000` | Timeout for `mcp.register_custom` / `connect` / `disconnect` |
+| `mcpSessionIdleMs` | `JIUWEN_MCP_SESSION_IDLE_MS` | `1800000` | Release a per-session `dsh-tools-<sha16>` proxy (disconnect + `mcp.delete_custom`) after this long without a turn or tool call; `0` = only on session end. Kept while another live dsh process still serves the session |
+| `mcpGcOnStart` | `JIUWEN_MCP_GC_ON_START` | `true` | On the first passthrough turn, delete stale `<mcpServerName>-<sha16>` registrations whose state dir is under this `mcpStateDir` and has no live endpoint (never touches servers without a local state dir) |
+| `mcpGcGraceMs` | `JIUWEN_MCP_GC_GRACE_MS` | `120000` | GC leaves state dirs modified within this window alone |
+| `auxSession` | `JIUWEN_AUX_SESSION` | `stable` | Aux calls (compaction, titles): `stable` reuses `<jiuwenSessionId>-aux` (deleted with the main session); `fresh` = new session per call |
 | `noUiAnswer` | — | "No interactive user is available…" | Reply sent to Jiuwen when no dsh answerer exists |
 | `interruptOnAbort` | — | `true` | Host abort → `chat.interrupt {intent:'cancel'}` |
 | `finalGraceMs` | `JIUWEN_FINAL_GRACE_MS` | `1500` | Idle grace after `chat.final` (turn normally ends on `processing_status.is_complete`) |

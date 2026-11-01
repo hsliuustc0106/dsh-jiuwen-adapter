@@ -106,6 +106,14 @@ export interface JiuwenAdapterConfig {
   llmAdapterModule?: string
   mappingPath?: string
   mcpRpcTimeoutMs?: number
+  /** Release a per-session MCP proxy after this long idle (ms, 0 = only on session end). Default 1800000. */
+  mcpSessionIdleMs?: number
+  /** GC stale `<mcpServerName>-<sha16>` registrations on first passthrough turn. Default true. */
+  mcpGcOnStart?: boolean
+  /** GC skips state dirs modified within this window (ms). Default 120000. */
+  mcpGcGraceMs?: number
+  /** Aux calls (compaction/titles): one stable `<id>-aux` Jiuwen session, or a fresh one per call. Default 'stable'. */
+  auxSession?: 'stable' | 'fresh'
   mcpServerName?: string
   mcpStateDir?: string
   mode?: 'gateway' | 'openai'

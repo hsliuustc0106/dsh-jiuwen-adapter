@@ -9,7 +9,7 @@ import { createMcpBridge, matchesAllowlist, proxyRegistration, isProxyConnected,
 const tmp = mkdtempSync(join(tmpdir(), 'jw-mcp-test-'))
 process.on('exit', () => rmSync(tmp, { recursive: true, force: true }))
 
-const base = { toolAllowlist: ['read', 'web_*', 'orchestrator_report'], toolApproval: 'dsh', approvalTimeoutMs: 200, toolCallTimeoutMs: 1000, mcpServerName: 'dsh-tools', mcpStateDir: join(tmp, 'state'), jiuwenMcpStateFile: join(tmp, 'jiuwen-state.json') }
+const base = { toolAllowlist: ['read', 'web_*', 'orchestrator_report'], toolApproval: 'dsh', approvalTimeoutMs: 200, toolCallTimeoutMs: 1000, mcpServerName: 'dsh-tools', mcpStateDir: join(tmp, 'state'), jiuwenMcpStateFile: join(tmp, 'jiuwen-state.json'), mcpGcOnStart: false }
 function bridge(services, cfg = {}) {
   const calls = []
   const b = createMcpBridge({ config: () => ({ ...base, ...cfg }), services: () => services, rpc: async (m, p) => { calls.push([m, p]); return {} } })
