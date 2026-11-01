@@ -23,6 +23,7 @@ const results = []
 // Each step starts from the snapshot: whatever global Jiuwen state a step leaves (permissions, heartbeat, MCP)
 // is reported as a NOTE and reset before the next step, so steps cannot mask each other's checks.
 let snap
+let standinActive = false
 const resetAfter = async (name) => {
   if (!snap || !(await gatewayUp())) return
   const s = await jiuwenState()
@@ -40,6 +41,8 @@ const step = async (name, args, env = {}, timeout = 900_000) => {
   results.push([name, ok, ((Date.now() - t0) / 1000).toFixed(0) + 's', fails.slice(0, 5)])
   console.log(`${ok ? 'PASS' : /^SKIP/m.test(out) ? 'SKIP' : 'FAIL'}  ${name}${fails.length ? '\n   ' + fails.join('\n   ') : ''}`)
   await waitGateway(30_000); await resetAfter(name)
+  // restore() writes the snapshot config back (the real model endpoint) and Jiuwen hot-reloads it: switch back to the stand-in
+  if (standinActive) { sh(process.env.JW_USE_STANDIN_CMD); if (!(await waitGateway())) throw new Error('Gateway did not come back on the stand-in') }
 }
 
 snap = await snapshot()
@@ -51,6 +54,7 @@ try {
   else console.log('SKIP live-gateway-smoke (needs a working real model; set LIVE_SMOKE=1)')
   if (useStandin) {
     sh(process.env.JW_USE_STANDIN_CMD); if (!(await waitGateway())) throw new Error('Gateway did not come back on the stand-in')
+    standinActive = true
     await step('live /jiuwen commands', ['test/live/commands.mjs'])
     await step('live-deep (A–M, L leak)', ['--expose-gc', 'scripts/live-deep.mjs'], { LEAK_TURNS: process.env.LEAK_TURNS || '200' })
     if (process.env.DSH_NM) await step('compat-runtime --sync --sync2 --reload', ['scripts/compat-runtime.mjs', '--jiuwen', `--gateway=${GATEWAY}`, '--sync', '--sync2', '--reload'])
@@ -58,6 +62,7 @@ try {
     if (process.env.DSH_BIN) await step('plain-dsh profile matrix (plain, ext, busy, mem)', [join('test/live/plain-dsh.mjs')], { JIUWEN_LIVE_NESTED: '1' }, 2_400_000)
   } else console.log('SKIP model-dependent sections (set JW_USE_STANDIN_CMD and JW_RESTORE_CMD)')
 } finally {
+  standinActive = false
   if (useStandin) { sh(process.env.JW_RESTORE_CMD); await waitGateway() }
   standin.stop()
   const diff = await restore(snap)

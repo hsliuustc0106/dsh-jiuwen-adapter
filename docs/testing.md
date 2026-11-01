@@ -104,7 +104,7 @@ npm run test:live
 | live-drop-recovery | + `GW_KILL`/`GW_START` |
 | plain-dsh profile matrix + extra plugins + interrupt-on-busy + memory-module plugins (`PLAIN_DSH_ONLY=plain\|ext\|busy\|mem`; `PLAIN_DSH_*_QUICK=1` runs only the adapter-last profile) | + `DSH_BIN` (also standalone: `npm run test:plain-dsh`) |
 
-Each step starts from the snapshot: a step that leaves global Jiuwen state changed (permissions, heartbeat, MCP) prints `NOTE … left Jiuwen state changed` and is reset. `LIVE_LOG_DIR=<dir>` keeps each step's full output.
+Each step starts from the snapshot: a step that leaves global Jiuwen state changed (permissions, heartbeat, MCP) prints `NOTE … left Jiuwen state changed` and is reset. The reset writes the snapshot config back (the real model endpoint) and Jiuwen hot-reloads it, so `run.mjs` re-runs `JW_USE_STANDIN_CMD` before the next step. `LIVE_LOG_DIR=<dir>` keeps each step's full output.
 
 The stand-in (`test/fixtures/stand-in.mjs`) is started on `STANDIN_PORT` (18999) unless a server is already listening there. It logs to `STANDIN_LOG`.
 

@@ -68,7 +68,8 @@
     "compat:live": "node scripts/compat-matrix.mjs --live --diff",
     "market:index": "node scripts/market-index.mjs",
     "test:live": "node test/live/run.mjs",
-    "test:plain-dsh": "node test/live/plain-dsh.mjs"
+    "test:plain-dsh": "node test/live/plain-dsh.mjs",
+    "guard:live": "bash scripts/guard-live.sh"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.5",
