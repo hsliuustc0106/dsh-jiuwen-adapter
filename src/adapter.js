@@ -247,7 +247,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
             }
           }
           // injectSystem (jiuwen sessions only; fail soft). Skipped for aux calls and ask_user answers.
-          let systemHash, systemSections, skillInjectHash
+          let systemHash, systemSections, skillInjectHash, fsRouteHash
       if (!aux && cfg.injectSystem !== 'off' && !turnMapping.pendingQuestion) {
             const inj = applySystemInjection(query, options, turnMapping, cfg.injectSystem, deps.personaFor?.(dshSessionId), cfg.injectSystemMaxBytes, cfg.injectSystemUpdate)
             query = inj.query; systemHash = inj.hash; systemSections = inj.sections
@@ -266,7 +266,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           if (!aux && cfg.mapJiuwenFsToDsh && mcpAttached && !turnMapping.pendingQuestion) {
             const fs = applyFsRouteInjection(query, turnMapping, true, mcpName)
             query = fs.query
-            if (fs.hash) turnMapping.fsRouteHash = fs.hash
+            if (fs.hash) fsRouteHash = fs.hash
           }
           const exposedNow = mcpAttached ? (deps.mcpBridge.exposed?.(dshSessionId) || []) : []
           if (!aux && cfg.syncSkillInstall !== false && turnMapping.skillBodies?.length) {
@@ -277,6 +277,16 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
           trace({ at: 'turn-start', dshSessionId, jiuwen: turnMapping.jiuwenSessionId, purpose: options.purpose, query: query.slice(0, 500), messages: (options.messages || []).length,
             blocks: JSON.stringify((options.messages || []).flatMap(m => Array.isArray(m.content) ? m.content.filter(b => b?.type !== 'text') : [])).slice(0, 1500) })
           let recorded = false
+          // Everything injected into this query (system block, FS hint, skill index/bodies) is pending
+          // until Jiuwen shows it accepted the turn (first event) and is then committed together, so a
+          // failed send never marks an injection as delivered and nothing is committed piecemeal.
+          let committed = aux
+          const commitInjected = () => {
+            if (committed) return
+            committed = true
+            const patch = { ...(systemHash ? { systemHash, systemSections } : {}), ...(skillInjectHash ? { skillInjectHash } : {}), ...(fsRouteHash ? { fsRouteHash } : {}) }
+            if (Object.keys(patch).length) { try { deps.sessions.update?.(dshSessionId, patch) } catch { /* ignore */ } }
+          }
           const endTurn = aux ? () => {} : (deps.sessions.beginTurn?.(dshSessionId) || (() => {}))
           const busy = !aux && deps.busy && cfg.onBusyMessage === 'interrupt' ? deps.busy.begin(dshSessionId) : undefined
           try {
@@ -294,6 +304,7 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
               try { return await deps.interact({ ...q, told: overrides.supportsUserInteraction === true }, dshSessionId) } finally { deps.busy?.setAwaiting(dshSessionId, null) }
             } } : {}),
             onEvent: (e) => {
+              commitInjected()
               trace({ at: 'event', type: e.type, name: e.name, event: e.event, ...(e.type === 'interaction_answered' ? { eventType: e.eventType, source: e.source, outcome: e.outcome, raw: JSON.stringify(e.raw).slice(0, 1500) } : {}) })
               try { overrides.onEvent?.(e) } catch { /* ignore */ }
               try { deps.onEvent?.({ dshSessionId, ...e }) } catch { /* ignore */ }
@@ -302,7 +313,8 @@ export function createJiuwenAdapter(LlmAdapterBase, deps) {
               trace({ at: 'turn-end', reason: info.reason, chars: info.text?.length, ...(info.interrupted ? { interrupted: true } : {}) })
               recorded = true
               if (!aux && (info.reason?.kind === 'stop' || info.reason?.kind === 'aborted')) {
-                deps.sessions.recordTurn?.(dshSessionId, { requestId: info.requestId, pendingQuestion: info.pendingQuestion, ...(systemHash ? { systemHash, systemSections } : {}), ...(skillInjectHash ? { skillInjectHash } : {}) })
+                commitInjected()
+                deps.sessions.recordTurn?.(dshSessionId, { requestId: info.requestId, pendingQuestion: info.pendingQuestion })
               }
               // Turns usually end on the terminal chat.final grace, before Gateway's processing_status
               // {is_complete} arrives, so bridges (planBridge) key off this explicit turn_end event.

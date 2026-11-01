@@ -660,7 +660,7 @@ export const SKILL_INDEX_OPEN = '[Host skills available — not installed in Jiu
  *  - mode 'body' (legacy): full bodies inline.
  *  - mode 'index' (default when a loader tool is reachable): name + one-line description only; the model
  *    loads a body on demand through the host's skill tool (opts.loaderTool, e.g. mcp_<server>_skill).
- * Bodies and descriptions are passed through redactSecrets(). Returns the query (unchanged on any error).
+ * Bodies and descriptions are passed through redactSecrets(). Does not mutate `mapping`. Returns the query (unchanged on any error).
  */
 export function applySkillBodyInjection(query, mapping, opts = {}) {
   try {
@@ -677,7 +677,7 @@ export function applySkillBodyInjection(query, mapping, opts = {}) {
     } else {
       block = `${SKILL_BODY_OPEN}\n${bodies.map(b => `### Host skill: ${b.name}\n${redactSecrets(b.content)}`).join('\n\n')}\n[/Host skill instructions]`
     }
-    mapping.skillInjectHash = sig
+    // Pure: the caller commits the hash once Jiuwen has accepted the turn (see adapter pendingInjected).
     if (typeof opts.onInjected === 'function') { try { opts.onInjected(sig, mode) } catch { /* ignore */ } }
     return `${block}\n\n${query}`
   } catch { return query }

@@ -9,7 +9,7 @@ const sk = [{ name: 'alpha', content: '---\ndescription: Do alpha things\n---\n#
 
 test('skill index: names + descriptions once, no bodies, no secrets', () => {
   const m = { jiuwenSessionId: 's1', skillBodies: sk }
-  const q = applySkillBodyInjection('hi', m, { mode: 'index', loaderTool: 'mcp_x_skill' })
+  const q = applySkillBodyInjection('hi', m, { mode: 'index', loaderTool: 'mcp_x_skill', onInjected: (h) => { m.skillInjectHash = h } })
   assert.ok(q.startsWith(SKILL_INDEX_OPEN))
   assert.match(q, /- alpha: Do alpha things/)
   assert.match(q, /- beta: Beta helps with charts\./)
@@ -29,7 +29,7 @@ test('skill index falls back to redacted bodies without a loader tool; off sends
 
 test('skill injection persists across restarts by hash and re-sends on change', () => {
   const m = { skillBodies: sk }
-  applySkillBodyInjection('q', m, { mode: 'index', loaderTool: 'L' })
+  applySkillBodyInjection('q', m, { mode: 'index', loaderTool: 'L', onInjected: (h) => { m.skillInjectHash = h } })
   const restored = { skillBodies: sk, skillInjectHash: m.skillInjectHash }
   assert.equal(applySkillBodyInjection('q', restored, { mode: 'index', loaderTool: 'L' }), 'q')
   const changed = { ...restored, skillBodies: [...sk, { name: 'gamma', content: 'Gamma.' }] }
@@ -99,8 +99,10 @@ test('config defaults and sessionOverrides matching', () => {
 test('skill injection state is the hash alone (no skillBodiesInjected flag)', async () => {
   const { applySkillBodyInjection } = await import('../src/host-sync.js')
   const m = { skillBodies: [{ name: 'a', content: 'A body' }] }
-  const q1 = applySkillBodyInjection('q', m, { mode: 'body' })
-  assert.notEqual(q1, 'q'); assert.ok(m.skillInjectHash); assert.equal(m.skillBodiesInjected, undefined)
+  let h
+  const q1 = applySkillBodyInjection('q', m, { mode: 'body', onInjected: (x) => { h = x } })
+  assert.notEqual(q1, 'q'); assert.ok(h); assert.equal(m.skillInjectHash, undefined, 'pure: caller commits'); assert.equal(m.skillBodiesInjected, undefined)
+  m.skillInjectHash = h
   assert.equal(applySkillBodyInjection('q', m, { mode: 'body' }), 'q', 'same hash → skip')
   m.skillBodiesInjected = true // legacy flag alone no longer suppresses a changed set
   m.skillBodies = [{ name: 'a', content: 'A body v2' }]

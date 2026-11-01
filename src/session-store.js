@@ -187,6 +187,7 @@ export class SessionStore {
           ...(entry.systemHash ? { systemHash: String(entry.systemHash) } : {}),
           ...(entry.systemSections && typeof entry.systemSections === 'object' ? { systemSections: entry.systemSections } : {}),
           ...(entry.skillInjectHash ? { skillInjectHash: String(entry.skillInjectHash) } : {}),
+          ...(entry.fsRouteHash ? { fsRouteHash: String(entry.fsRouteHash) } : {}),
           ...(entry.swarmRunId ? { swarmRunId: String(entry.swarmRunId) } : {}),
           ...(entry.projectDir ? { projectDir: String(entry.projectDir) } : {}),
           ...(Array.isArray(entry.mcpNames) ? { mcpNames: entry.mcpNames.map(String) } : {}),
