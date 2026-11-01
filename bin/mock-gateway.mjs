@@ -7,8 +7,9 @@ import { WebSocketServer } from './_ws-server.mjs'
 
 const REPLAY_ASK = new Set()
 const SHAPE = { v: process.env.JIUWEN_GATEWAY_MOCK_SHAPE || '0.2.5' }
-const PORT = Number(process.env.JIUWEN_GATEWAY_MOCK_PORT || 19000)
-const wss = await WebSocketServer({ port: PORT, host: '127.0.0.1' })
+// JIUWEN_GATEWAY_MOCK_PORT=0 → OS-assigned port; the bound port is printed on the "listening" line.
+const wss = await WebSocketServer({ port: Number(process.env.JIUWEN_GATEWAY_MOCK_PORT ?? 19000), host: '127.0.0.1' })
+const PORT = wss.port
 console.log(`[mock-gateway] listening on ws://127.0.0.1:${PORT}/ws`)
 
 const HISTORY = new Map() // session_id -> turns[]

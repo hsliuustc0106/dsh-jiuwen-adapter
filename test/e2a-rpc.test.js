@@ -4,16 +4,13 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { GatewayTransport } from '../src/gateway-transport.js'
+import { spawnMockGateway } from './helpers/spawn-mock-gateway.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 
 test('gateway unary RPCs: models.list history.get mcp.list', async () => {
-  const port = 19110 + Math.floor(Math.random() * 200)
-  const child = spawn(process.execPath, [join(ROOT, 'bin/mock-gateway.mjs')], {
-    env: { ...process.env, JIUWEN_GATEWAY_MOCK_PORT: String(port) },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  await new Promise(r => setTimeout(r, 400))
+  const mock = await spawnMockGateway()
+  const { port } = mock
   try {
     const t = new GatewayTransport({
       gatewayURL: `ws://127.0.0.1:${port}/ws`,
@@ -44,6 +41,6 @@ test('gateway unary RPCs: models.list history.get mcp.list', async () => {
     const meta = await t.sessionMetadata('rpc-sess')
     assert.equal(meta.mock_auth?.has_token, true)
   } finally {
-    child.kill('SIGTERM')
+    await mock.stop()
   }
 })

@@ -13,10 +13,10 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as plugin from '../index.js'
 import { GatewayTransport } from '../src/gateway-transport.js'
+import { spawnMockGateway } from './helpers/spawn-mock-gateway.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
-const PORT = 20000 + Math.floor(Math.random() * 5000)
-const URL_ = `ws://127.0.0.1:${PORT}/ws`
+let URL_
 let gw, dir
 
 function host(config = {}) {
@@ -44,10 +44,10 @@ const debug = () => new GatewayTransport({ gatewayURL: URL_ }).rpc('debug.state'
 
 before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'jw-feat-'))
-  gw = spawn(process.execPath, [join(ROOT, 'bin/mock-gateway.mjs')], { env: { ...process.env, JIUWEN_GATEWAY_MOCK_PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'inherit'] })
-  await new Promise((res, rej) => { gw.stdout.on('data', d => /listening/.test(String(d)) && res()); gw.on('exit', c => rej(new Error(`exit ${c}`))) })
+  gw = await spawnMockGateway()
+  URL_ = gw.url
 })
-after(() => { gw?.kill(); rmSync(dir, { recursive: true, force: true }) })
+after(async () => { await gw?.stop(); rmSync(dir, { recursive: true, force: true }) })
 
 import { extractPersona, applySystemInjection, latestSystemText, capBytes } from '../src/system-inject.js'
 import { resolveConfig as loadConfig } from '../src/config.js'

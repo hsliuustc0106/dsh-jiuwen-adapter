@@ -4,8 +4,8 @@ import { WebSocketServer } from '../bin/_ws-server.mjs'
 import { GatewayTransport } from '../src/gateway-transport.js'
 
 test('gateway transport streams chat.delta to finish', async () => {
-  const port = 19051 + Math.floor(Math.random() * 1000)
-  const wss = await WebSocketServer({ port, host: '127.0.0.1' })
+  const wss = await WebSocketServer({ port: 0, host: '127.0.0.1' })
+  const port = wss.port
   try {
     wss.on('connection', (ws) => {
       ws.send(JSON.stringify({ type: 'event', event: 'connection.ack', payload: {} }))

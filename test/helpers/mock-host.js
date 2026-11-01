@@ -1,4 +1,4 @@
-/** Shared harness: spawn bin/mock-gateway.mjs on a random port and build a minimal Cordis-like host. */
+/** Shared harness: spawn bin/mock-gateway.mjs on an OS-assigned port (port 0) and build a minimal Cordis-like host. */
 import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -6,19 +6,18 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as plugin from '../../index.js'
 import { GatewayTransport } from '../../src/gateway-transport.js'
+import { spawnMockGateway } from './spawn-mock-gateway.js'
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
 
 export async function startMock() {
-  const port = 25000 + Math.floor(Math.random() * 10000)
-  const url = `ws://127.0.0.1:${port}/ws`
   const dir = mkdtempSync(join(tmpdir(), 'jw-ext-'))
-  const gw = spawn(process.execPath, [join(ROOT, 'bin/mock-gateway.mjs')], { env: { ...process.env, JIUWEN_GATEWAY_MOCK_PORT: String(port), JIUWEN_GATEWAY_MOCK_SHAPE: '0.2.7' }, stdio: ['ignore', 'pipe', 'inherit'] })
-  await new Promise((res, rej) => { gw.stdout.on('data', d => /listening/.test(String(d)) && res()); gw.on('exit', c => rej(new Error(`exit ${c}`))) })
+  const gw = await spawnMockGateway({ JIUWEN_GATEWAY_MOCK_SHAPE: '0.2.7' })
+  const { url } = gw
   return {
     url, dir,
     rpc: (m, p = {}) => new GatewayTransport({ gatewayURL: url }).rpc(m, p),
-    stop() { gw.kill(); rmSync(dir, { recursive: true, force: true }) },
+    stop() { rmSync(dir, { recursive: true, force: true }); return gw.stop() },
   }
 }
 

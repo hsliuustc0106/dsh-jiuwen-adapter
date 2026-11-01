@@ -8,8 +8,8 @@ import { GatewayTransport } from '../src/gateway-transport.js'
 
 const ev = (event, payload = {}) => JSON.stringify({ type: 'event', event, payload: { event_type: event, ...payload } })
 async function server(script) {
-  const port = 21000 + Math.floor(Math.random() * 8000)
-  const wss = await WebSocketServer({ port, host: '127.0.0.1' })
+  const wss = await WebSocketServer({ port: 0, host: '127.0.0.1' })
+  const port = wss.port
   wss.on('connection', (ws) => {
     ws.on('error', () => {})
     ws.send(JSON.stringify({ type: 'event', event: 'connection.ack', payload: {} }))

@@ -13,10 +13,10 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as plugin from '../index.js'
 import { resolveConfig } from '../src/config.js'
+import { spawnMockGateway } from './helpers/spawn-mock-gateway.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
-const GW_PORT = 19000 + 100 + Math.floor(Math.random() * 800)
-let gw, dir
+let GW_PORT, gw, dir
 
 function minimalHost() {
   const adapters = new Map()
@@ -47,15 +47,10 @@ function minimalHost() {
 
 before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'jw-generic-'))
-  gw = spawn(process.execPath, [join(ROOT, 'bin/mock-gateway.mjs')], {
-    env: { ...process.env, JIUWEN_GATEWAY_MOCK_PORT: String(GW_PORT) }, stdio: ['ignore', 'pipe', 'inherit'],
-  })
-  await new Promise((res, rej) => {
-    gw.stdout.on('data', d => { if (/listening/.test(String(d))) res() })
-    gw.on('exit', c => rej(new Error(`mock-gateway exited ${c}`)))
-  })
+  gw = await spawnMockGateway()
+  GW_PORT = gw.port
 })
-after(() => { gw?.kill(); rmSync(dir, { recursive: true, force: true }) })
+after(async () => { await gw?.stop(); rmSync(dir, { recursive: true, force: true }) })
 
 const text = cs => cs.filter(c => c.type === 'text-delta').map(c => c.text).join('')
 

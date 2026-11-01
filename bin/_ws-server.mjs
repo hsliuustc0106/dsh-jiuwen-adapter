@@ -9,6 +9,8 @@ export async function WebSocketServer({ port, host }) {
   try {
     const ws = await import('ws')
     const wss = new ws.WebSocketServer({ port, host, path: '/ws' })
+    await new Promise((resolve, reject) => { wss.once('listening', resolve); wss.once('error', reject) })
+    wss.port = wss.address().port
     return wss
   } catch {
     // fall through to built-in mini server
@@ -44,7 +46,13 @@ export async function WebSocketServer({ port, host }) {
     emitter.emit('connection', client, req)
   })
 
-  await new Promise((resolve) => server.listen(port, host, resolve))
+  // Port 0 = OS-assigned (tests); a bind failure rejects instead of crashing via an unhandled 'error'.
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(port, host, () => { server.off('error', reject); resolve() })
+  })
+  emitter.port = server.address().port
+  emitter.address = () => server.address()
 
   emitter.close = () => new Promise((resolve) => {
     for (const s of sockets) {

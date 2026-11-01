@@ -13,8 +13,8 @@ import { join } from 'node:path'
 
 const ev = (event, payload = {}) => JSON.stringify({ type: 'event', event, payload: { event_type: event, ...payload } })
 async function server(script) {
-  const port = 21000 + Math.floor(Math.random() * 8000)
-  const wss = await WebSocketServer({ port, host: '127.0.0.1' })
+  const wss = await WebSocketServer({ port: 0, host: '127.0.0.1' })
+  const port = wss.port
   const state = { open: 0, sends: [], frames: [] }
   wss.on('connection', (ws) => {
     state.open++
@@ -177,8 +177,8 @@ test('fuzz: hostile dsh session ids in the mapping store (prototype keys, unicod
 })
 
 test('fuzz: null / primitive frames before connection.ack and in RPC replies are ignored', async () => {
-  const port = 21000 + Math.floor(Math.random() * 8000)
-  const wss = await WebSocketServer({ port, host: '127.0.0.1' })
+  const wss = await WebSocketServer({ port: 0, host: '127.0.0.1' })
+  const port = wss.port
   const unhandled = []; const onU = e => unhandled.push(e); process.on('uncaughtException', onU)
   wss.on('connection', (ws) => {
     ws.on('error', () => {})

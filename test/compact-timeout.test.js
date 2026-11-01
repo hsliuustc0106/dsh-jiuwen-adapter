@@ -6,8 +6,8 @@ import { createJiuwenCommand } from '../src/commands.js'
 
 // Gateway stand-in: acks, then answers each unary method after `delays[method]` ms (default 0).
 async function gateway(delays = {}) {
-  const port = 20051 + Math.floor(Math.random() * 2000)
-  const wss = await WebSocketServer({ port, host: '127.0.0.1' })
+  const wss = await WebSocketServer({ port: 0, host: '127.0.0.1' })
+  const port = wss.port
   wss.on('connection', (ws) => {
     ws.send(JSON.stringify({ type: 'event', event: 'connection.ack', payload: {} }))
     ws.on('message', (raw) => {
