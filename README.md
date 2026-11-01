@@ -53,6 +53,7 @@ Step-by-step guide for Mac and Linux: **[docs/quickstart.md](./docs/quickstart.m
 | ⌨️ **`/jiuwen` command** | Sessions, models, modes, skills, agents, cron, MCP and more ([list](./docs/dsh-integration.md#5-jiuwen-slash-command-dsh-command-registry)) | on |
 | 🖼️ **Multimodal** | Image and file parts are sent as Jiuwen media | on |
 | 🪪 **System prompt → Jiuwen** | `injectSystem: full\|persona` sends the host system prompt (any role/profile) once per Jiuwen session, resent only on change, capped by `injectSystemMaxBytes` | default `full` (`off` to disable) |
+| ⏹️ **Interrupt on new message** | A user message that arrives while a Jiuwen turn is running interrupts it (`chat.interrupt`), coalesces everything that arrived meanwhile into one step, and resends with a note that the previous turn was cut (side effects not rolled back). Waits for a pending approval card first ([docs](./docs/configuration.md#interrupt-on-busy-onbusymessage)) | default `interrupt` (`onBusyMessage: queue` / `JIUWEN_ON_BUSY_MESSAGE=queue` for the old wait-until-done) |
 | 🪜 **Full trajectory** | `trajectoryDetail: full` renders Jiuwen tool calls, results, subtasks and plan steps as Markdown steps in the reasoning block | default `full` (`summary` to disable) |
 | 🔌 **dsh tools → Jiuwen** | Allowlisted dsh tools exposed to Jiuwen over MCP, each call gated by an approval | opt-in |
 | 🧭 **Bridges** | Model discovery, typed events | opt-in |

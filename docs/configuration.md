@@ -56,6 +56,9 @@ Precedence: **environment variable > Cordis plugin config > default** (`provider
 | `finalGraceMs` | `JIUWEN_FINAL_GRACE_MS` | `1500` | Idle grace after `chat.final` (turn normally ends on `processing_status.is_complete`) |
 | `terminalFinalGraceMs` | `JIUWEN_TERMINAL_FINAL_GRACE_MS` | `100` | JiuwenSwarm sends an empty, request-scoped `chat.final` (no `final_mode`) ~0.7 s before `processing_status.is_complete`; the turn ends this long after it if nothing else arrives. Negative = wait for `processing_status`/`finalGraceMs` |
 | `postCancelSettleMs` | `JIUWEN_POST_CANCEL_SETTLE_MS` | `1000` | After a cancel, delay the next `chat.send` on that session until this long after the cancel (JiuwenSwarm drops a send that arrives within ~300 ms of `chat.interrupt`). `0` disables |
+| `onBusyMessage` | `JIUWEN_ON_BUSY_MESSAGE` | `interrupt` | A new user message reaches a host session whose Jiuwen turn is still running. `interrupt`: `chat.interrupt {intent:'cancel'}` that turn, wait for it to settle, then resend the new message(s) as one step with an interruption note. `queue`: wait until the turn ends (pre-0.2.x behaviour). See [Interrupt on busy](#interrupt-on-busy-onbusymessage) |
+| `interruptSettleMs` | `JIUWEN_INTERRUPT_SETTLE_MS` | `8000` | Max wait for Jiuwen to confirm the interrupt (`chat.interrupt_result`, `processing_status{is_complete}` or `stream.end`) before the resend |
+| `busyIgnoreSources` | — | automation kinds (see below) | Inbox `source.kind`s that never trigger an interrupt; messages with `source.form: 'notice'` never do either |
 | `titleMode` | `JIUWEN_TITLE_MODE` | `local` | `purpose: session-title` answered locally (`local`) or by Jiuwen (`jiuwen`) |
 | `compactionMode` | `JIUWEN_COMPACTION_MODE` | `local` | `purpose: compaction`: `local` digest (no Jiuwen call) / `local+jiuwen` (+ `command.compact` on the Jiuwen session) / `jiuwen` (legacy aux turn) |
 | `registerCommands` | `JIUWEN_REGISTER_COMMANDS=0` disables | `true` | Register `/jiuwen <sub>` on `ctx.commands` ([dsh-integration.md](./dsh-integration.md#5-jiuwen-slash-command-dsh-command-registry)) |
@@ -143,3 +146,40 @@ On load the adapter checks its config and logs `[jiuwen] …` warnings. It never
 - **Wrong type**: a value of the wrong kind, such as an object where a string is expected
 
 `index.d.ts` exports `JiuwenAdapterConfig` for typed configs.
+
+
+## Interrupt on busy (`onBusyMessage`)
+
+JiuwenSwarm has no mid-turn message injection. Without this option a message sent while a Jiuwen turn
+is running waits in the host inbox until that turn finishes (so "do A … actually do B" first finishes A,
+and a burst of messages runs one turn each). With `onBusyMessage: 'interrupt'` (default) the adapter:
+
+1. listens to the host's generic `agent/inbox/inserted` event (any session, any plugin/profile; subscribed
+   lazily on the first Jiuwen turn) and reacts to person-originated input: dsh web/RPC prompts and messages a
+   plugin relays on behalf of a person. Host automation never interrupts: source kinds in `busyIgnoreSources`
+   (default `user-question-reply`, `schedule`, `goal`, `subagent`, `subagent-settled`, `agent-message`,
+   `runtime-context`, `system`) and any injected notice (`source.form: 'notice'`);
+2. sends `chat.interrupt {intent:'cancel', request_id}` for the running request **once per turn** and
+   waits up to `interruptSettleMs` for it to settle; the next `chat.send` still honours `postCancelSettleMs`;
+3. moves every message still queued for later turns (`next-turn`) to the step boundary (`next-step`, the
+   same as the host's "steer a queued message" action) so all messages that arrived meanwhile **coalesce
+   into one resend**;
+4. ends the host stream with `stop` and the marker `⏹ (interrupted — a new message arrived; continuing with it)`;
+   the host loop runs the next step at once, and the adapter prefixes that query (after the PR #3 host-system
+   block, which is unchanged) with: *your previous turn was interrupted because the user sent a new message …
+   tool calls and side effects that already ran were NOT rolled back — check the current state … the message(s)
+   below supersede the interrupted request*. The note is sent exactly once.
+
+Interactions:
+
+| Situation | Behaviour |
+| --- | --- |
+| Approval card pending (`permission_interrupt` / `confirm_interrupt` / `plan.approval_required` / SwarmFlow human) | **Deferred**: the user's approve/reject decision is still delivered to Jiuwen (never auto-rejected by a chat message); the interrupt fires right after the card resolves |
+| Jiuwen question card pending (`ask_user`) | Unchanged: the typed message supersedes the question (existing behaviour), no extra interrupt |
+| Host stop / cancel | Wins: the turn ends `aborted` (normal cancel path), nothing is promoted and no note is sent |
+| Turn already finishing (terminal `chat.final` seen) | Not interrupted; the message is handled next as usual |
+| Compaction / title (aux calls) | Never interrupted; they are local and not Jiuwen turns |
+| `injectSystem` (host system prompt) | Unaffected; the hash-gated block is prepended before the note as before |
+
+Trace (`traceFile`): `{"at":"turn-interrupt","phase":"requested"|"deferred"|"coalesced"|"settled"|"resend", …}`
+(`settled` carries `messages`, `promoted`, `waitedMs`, `settledBy`), plus `turn-end` with `interrupted:true`.

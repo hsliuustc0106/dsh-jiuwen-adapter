@@ -5,6 +5,7 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+- Interrupt on busy (`onBusyMessage: 'interrupt' | 'queue'`, default `interrupt`, env `JIUWEN_ON_BUSY_MESSAGE`; `interruptSettleMs`): a user message arriving while a Jiuwen turn runs interrupts it via `chat.interrupt`, coalesces all messages that arrived meanwhile into one step, and resends with a note that the previous turn was interrupted (side effects not rolled back). Deferred while an approval card is pending; host stop wins. New trace event `turn-interrupt`.
 - Memory-module plugins (agent-instructions, session-reference, session-search) verified with Jiuwen sessions.
   - Fix: read-only dsh session-query tools skip the passthrough approval gate (`toolApprovalExempt`); before, they hung Jiuwen turns until approval timed out.
 - Tests:
