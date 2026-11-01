@@ -65,8 +65,14 @@ export function apply(ctx) {
       log(label, 'prompt1', id); await prompt(id, `TAG:${label}1 hello`); log(label, 'reply1', lastReply(id))
       r.reply1 = lastReply(id)
       const agent = agentOf(id)
+      // dsh-session-title schedules fallback + LLM title via defer(); that work is NOT covered by
+      // whenIdle. Wait for a title (or a short bound) so rename/plan/fork see a stable log prefix —
+      // otherwise adapter session/event listeners can shift when the fallback lands relative to
+      // turn/end and the exact event sequence flakes under (a).
+      for (let i = 0; i < 50 && !evs(id).some(e => e.type === 'session/title'); i++) await tick(100)
+      await tick(200)
       try { await sc.rename({ sessionId: id, title: `${label} 标题 ✓` }, new AbortController().signal) } catch (e) { err(`${label} rename`, e) }
-      try { const pm = g('agentPresets')?.serviceFor?.(agent, 'planMode') ?? g('planMode'); r.planSvc = !!pm; pm?.set(agent, true); await tick(200); pm?.set(agent, false) } catch (e) { err(`${label} plan`, e) }
+      try { const pm = g('agentPresets')?.serviceFor?.(agent, 'planMode') ?? g('planMode'); r.planSvc = !!pm; pm?.set(agent, true); await tick(200); pm?.set(agent, false); await waitIdle(id, 10_000) } catch (e) { err(`${label} plan`, e) }
       try {
         const gl = g('goals'); let s = gl.create(agent, { objective: `${label} goal`, maxGoalRounds: 3 }); await tick(300)
         const ref = () => { const x = gl.get?.(agent)?.goal ?? gl.get?.(agent) ?? s?.goal ?? s; return { id: x.id, revision: x.revision } }
@@ -81,6 +87,8 @@ export function apply(ctx) {
       try { const live = agentOf(id); const reg = g('agentPresets')?.serviceFor?.(live, 'skills') ?? g('skills'); r.skills = (await reg.list({ cwd: SANDBOX, scope: live })).map(s => s.name).filter(n => /probe/.test(n)).sort() } catch (e) { err(`${label} skills`, e) }
       log(label, 'prompt2'); await prompt(id, `TAG:${label}2 again`)
       r.reply2 = lastReply(id)
+      // Fork copies the live log: settle so late title/plan splices are not still in flight.
+      await waitIdle(id, 10_000); await tick(200)
       log(label, 'fork'); try { const f = await sc.fork({ sessionId: id }, new AbortController().signal); r.fork = f.sessionId; await prompt(f.sessionId, `TAG:${label}f on fork`); r.forkReply = lastReply(f.sessionId); r.forkEvents = norm(evs(f.sessionId).map(e => ({ type: e.type, data: e.data }))) } catch (e) { err(`${label} fork`, e) }
       try { const s = (await g('schedule').list({ sessionId: id })); for (const x of (s.schedules || s.items || s || [])) if (x?.id) await g('schedule').delete({ sessionId: id, id: x.id }) } catch (e) { err(`${label} schedule.delete`, e) }
       r.events = norm(evs(id).map(e => ({ type: e.type, data: e.data })))

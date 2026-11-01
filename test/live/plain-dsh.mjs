@@ -178,7 +178,29 @@ try {
   const R = ONLY === 'mem' || ONLY === 'ext' || ONLY === 'busy' ? {} : { pref: await run('pref', 'plain'), pjwPlain: await run('pjw', 'plain'), pjwfirstPlain: await run('pjwfirst', 'plain'), pjw: await run('pjw', 'jw'), pjwfirst: await run('pjwfirst', 'jw') }
   if (ONLY === 'all' || ONLY === 'plain') {
   const RAW_IDS = new Set(['id', 'fork']) // raw dsh session ids (random per run); the normalized events carry the rest
-  const cmp = o => Object.fromEntries(Object.entries(o.plain || {}).filter(([k]) => !RAW_IDS.has(k)))
+  // hash is a sha1 of the raw events array — redundant with events once we stabilize, and would
+  // still flip if only volatile title plumbing moved.
+  const RAW_META = new Set(['hash'])
+  // dsh-session-title appends fallback / provider titles and title-llm-request asynchronously
+  // (defer), outside whenIdle. Their interleaving with turn/end is timing-dependent and shifts
+  // when extra session/event listeners (the adapter) run — not a non-jiuwen behaviour change.
+  // Keep explicit user renames; drop auto-title plumbing from the (a) equality view.
+  const stabilizeEvents = (evs) => Array.isArray(evs) ? evs.filter(e => {
+    if (e?.type === 'session/title-llm-request') return false
+    if (e?.type === 'session/title') {
+      const kind = e?.data?.source?.kind
+      if (kind === 'fallback' || kind === 'provider') return false
+    }
+    return true
+  }) : evs
+  const cmp = o => {
+    const plain = o.plain || {}
+    const events = stabilizeEvents(plain.events)
+    const forkEvents = stabilizeEvents(plain.forkEvents)
+    const types = [...new Set((events || []).map(e => e.type))].sort()
+    return Object.fromEntries(Object.entries({ ...plain, events, forkEvents, types })
+      .filter(([k]) => !RAW_IDS.has(k) && !RAW_META.has(k)))
+  }
   const key = o => JSON.stringify(cmp(o))
   // Show each differing key from its first diverging character (the shared prefix hid the actual difference).
   const at = (x, y) => { let i = 0; while (i < x.length && x[i] === y[i]) i++; return Math.max(0, i - 40) }
