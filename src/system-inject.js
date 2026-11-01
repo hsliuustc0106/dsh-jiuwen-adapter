@@ -28,8 +28,16 @@ export function splitSections(text) {
     const n = (seen.get(cur.head) || 0) + 1; seen.set(cur.head, n)
     out.push({ key: `${cur.head}#${n}`, head: cur.head, text: cur.lines.join('\n') })
   }
+  let fence = null // inside a ``` / ~~~ fenced block: `# comment` lines there are not headings
   for (const line of String(text || '').split('\n')) {
-    if (/^#{1,3} \S/.test(line)) { flush(); cur = { head: line.trim(), lines: [line] } } else cur.lines.push(line)
+    const f = /^\s{0,3}(`{3,}|~{3,})/.exec(line)
+    if (f) {
+      if (!fence) fence = f[1]
+      else if (f[1][0] === fence[0] && f[1].length >= fence.length && !line.trim().slice(f[1].length).trim()) fence = null
+      cur.lines.push(line)
+      continue
+    }
+    if (!fence && /^#{1,3} \S/.test(line)) { flush(); cur = { head: line.trim(), lines: [line] } } else cur.lines.push(line)
   }
   flush()
   return out.filter(s => s.head || s.text.trim())

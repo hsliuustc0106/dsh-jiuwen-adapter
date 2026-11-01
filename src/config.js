@@ -251,7 +251,7 @@ export function resolveConfig(raw = {}, opts = {}) {
     syncDelete: syncBit('syncDelete', 'JIUWEN_SYNC_DELETE'),
     syncGoal: syncBit('syncGoal', 'JIUWEN_SYNC_GOAL'),
     /** When the host system prompt changes mid-session: diff (default; resend only changed heading sections when clearly smaller) | full (resend everything). */
-    injectSystemUpdate: pickEnum(env.JIUWEN_INJECT_SYSTEM_UPDATE || raw.injectSystemUpdate, ['diff', 'full'], 'diff'),
+    injectSystemUpdate: pickEnum(env.JIUWEN_INJECT_SYSTEM_UPDATE || raw.injectSystemUpdate, ['diff', 'full'], 'full'),
     /** Host skills Jiuwen lacks: index (default; name+description once, bodies loaded on demand via skillLoaderTool) | body (legacy inline bodies) | off. Falls back to body when the loader tool is not passed through. */
     hostSkillInject: pickEnum(env.JIUWEN_HOST_SKILL_INJECT || raw.hostSkillInject, ['index', 'body', 'off'], 'index'),
     /** Passthrough host tool that returns a skill body by name (dsh: `skill`). */

@@ -79,7 +79,7 @@ export interface JiuwenAdapterConfig {
   injectSystem?: 'off' | 'persona' | 'full'
   /** Byte cap for the forwarded host system prompt (default 65536); longer text gets a truncation marker. */
   injectSystemMaxBytes?: number
-  /** Mid-session host system prompt change: resend only changed heading sections (diff, default) or everything (full). */
+  /** Mid-session host system prompt change: resend everything (full, default) or only changed heading sections (diff, opt-in). */
   injectSystemUpdate?: 'diff' | 'full'
   /** Host skills Jiuwen lacks: index (default; name+description, bodies on demand via skillLoaderTool) | body | off. */
   hostSkillInject?: 'index' | 'body' | 'off'

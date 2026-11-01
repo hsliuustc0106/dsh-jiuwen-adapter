@@ -83,7 +83,7 @@ test('systemDelta refuses unsafe deltas (preamble change, reorder, no baseline, 
 
 test('config defaults and sessionOverrides matching', () => {
   const c = resolveConfig({}, { env: {} })
-  assert.equal(c.injectSystemUpdate, 'diff')
+  assert.equal(c.injectSystemUpdate, 'full', 'diff is opt-in')
   assert.equal(c.hostSkillInject, 'index')
   assert.equal(c.skillLoaderTool, 'skill')
   assert.equal(c.coreTools, undefined, 'prompt-based core-tool hint removed')
@@ -107,4 +107,11 @@ test('skill injection state is the hash alone (no skillBodiesInjected flag)', as
   m.skillBodiesInjected = true // legacy flag alone no longer suppresses a changed set
   m.skillBodies = [{ name: 'a', content: 'A body v2' }]
   assert.notEqual(applySkillBodyInjection('q', m, { mode: 'body' }), 'q')
+})
+
+test('splitSections ignores # lines inside fenced code blocks', () => {
+  const t = '# A\nintro\n```bash\n# not a heading\necho hi\n```\n~~~\n## also not\n~~~\n# B\nend'
+  assert.deepEqual(splitSections(t).map(s => s.head), ['# A', '# B'])
+  const unclosed = '# A\n```\n# inside\n'
+  assert.deepEqual(splitSections(unclosed).map(s => s.head), ['# A'])
 })
